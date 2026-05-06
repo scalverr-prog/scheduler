@@ -1,0 +1,1 @@
+ALTER TABLE `activities` MODIFY COLUMN `priority` enum('Planned','Routine','Urgent','Emergent','Add-On') DEFAULT 'Routine';

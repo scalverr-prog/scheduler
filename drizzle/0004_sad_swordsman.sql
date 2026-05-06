@@ -1,0 +1,1 @@
+ALTER TABLE `activities` MODIFY COLUMN `sedationType` enum('None','Conscious Sedation','Moderate Sedation','MAC','General Anesthesia') DEFAULT 'None';

@@ -1,0 +1,48 @@
+{
+  "version": "7",
+  "dialect": "mysql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "5",
+      "when": 1778034144259,
+      "tag": "0000_great_medusa",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "5",
+      "when": 1778034279486,
+      "tag": "0001_stiff_captain_cross",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1778035684775,
+      "tag": "0002_chief_adam_destine",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "5",
+      "when": 1778046770558,
+      "tag": "0003_burly_ulik",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "5",
+      "when": 1778067283212,
+      "tag": "0004_sad_swordsman",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "5",
+      "when": 1778067390700,
+      "tag": "0005_wonderful_ser_duncan",
+      "breakpoints": true
+    }
+  ]
+}
