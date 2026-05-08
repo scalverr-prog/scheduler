@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { protectedProcedure, router } from "../_core/trpc";
-import { getActivities, getActivityById, createActivity, updateActivity, getActivitiesByPatient, getActivityTypes, getRooms, getStaffWithSpecializations, createStaffMember } from "../db";
+import { getActivities, getActivityById, createActivity, updateActivity, deleteActivity, getActivitiesByPatient, getActivityTypes, getRooms, getStaffWithSpecializations, createStaffMember } from "../db";
 import { createAuditLog } from "../db";
 
 const activitySchema = z.object({
@@ -213,6 +213,32 @@ export const activitiesRouter = router({
       return { success: true };
     }),
 
+  delete: protectedProcedure
+    .input(z.object({ id: z.number() }))
+    .mutation(async ({ input, ctx }) => {
+      if (ctx.user.role !== "admin" && ctx.user.role !== "staff") {
+        throw new Error("Unauthorized: Only admin or staff can delete activities");
+      }
+
+      const activity = await getActivityById(input.id);
+      if (!activity) {
+        throw new Error("Activity not found");
+      }
+
+      await deleteActivity(input.id);
+
+      await createAuditLog({
+        action: "DELETE",
+        entityType: "Activity",
+        entityId: input.id,
+        userId: ctx.user.id,
+        previousValues: JSON.stringify(activity),
+        createdAt: new Date(),
+      });
+
+      return { success: true };
+    }),
+
   getActivityTypes: protectedProcedure.query(async () => {
     return getActivityTypes();
   }),
@@ -228,7 +254,7 @@ export const activitiesRouter = router({
   createStaff: protectedProcedure
     .input(z.object({
       name: z.string().min(1, "Name is required"),
-      specialization: z.enum(["PMD", "Sedationist", "Nurse", "Technician", "Anesthesiologist", "Other"]).optional(),
+      specialization: z.enum(["PMD", "Sedationist", "Nurse", "Technician", "Anesthesiologist", "Other", "Oncology", "Peds-Surgery", "Intensivist"]).optional(),
     }))
     .mutation(async ({ input, ctx }) => {
       if (ctx.user.role !== "admin" && ctx.user.role !== "staff") {

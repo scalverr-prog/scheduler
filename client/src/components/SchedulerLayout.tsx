@@ -19,7 +19,6 @@ export default function SchedulerLayout({ children }: SchedulerLayoutProps) {
     { href: "/schedule", label: "Schedule", icon: "📅" },
     { href: "/patients", label: "Patients", icon: "👥" },
     ...(user?.role === "admin" ? [{ href: "/audit", label: "Audit Log", icon: "📋" }] : []),
-    ...(user?.role === "admin" ? [{ href: "/settings", label: "Settings", icon: "⚙️" }] : []),
   ];
 
   const isActive = (href: string) => location === href;

@@ -5,29 +5,125 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { useState } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Plus, Search, Clock, User, MapPin, Edit2, Trash2, Stethoscope, Droplet } from "lucide-react";
+import { Plus, Clock, MapPin, Edit2, Trash2, Stethoscope, Droplet, Download, ChevronDown } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useLocation } from "wouter";
+import DeleteConfirmDialog from "@/components/DeleteConfirmDialog";
+import { toast } from "sonner";
 
 export default function Schedule() {
   const [, navigate] = useLocation();
+  const utils = trpc.useUtils();
   const { data: activities, isLoading } = trpc.activities.list.useQuery();
   const { data: patients } = trpc.patients.list.useQuery();
   const { data: activityTypes } = trpc.activities.getActivityTypes.useQuery();
+  const { data: staff } = trpc.activities.getStaff.useQuery();
 
   const [searchTerm, setSearchTerm] = useState("");
   const [filterStatus, setFilterStatus] = useState<string>("");
   const [filterPatient, setFilterPatient] = useState<string>("");
-  const [filterActivityType, setFilterActivityType] = useState<string>("");
-  const [filterPMD, setFilterPMD] = useState<string>("");
-  const [filterSedationist, setFilterSedationist] = useState<string>("");
+  const [filterSedation, setFilterSedation] = useState<string>("");
+
+  // Modal states
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deletingActivityId, setDeletingActivityId] = useState<number | null>(null);
+
+  const deleteMutation = trpc.activities.delete.useMutation({
+    onSuccess: () => {
+      toast.success("Activity deleted successfully");
+      utils.activities.list.invalidate();
+      setDeleteDialogOpen(false);
+      setDeletingActivityId(null);
+    },
+    onError: (error) => {
+      toast.error(error.message || "Failed to delete activity");
+    },
+  });
+
+  const updateStatusMutation = trpc.activities.update.useMutation({
+    onSuccess: () => {
+      toast.success("Status updated");
+      utils.activities.list.invalidate();
+    },
+    onError: (error) => {
+      toast.error(error.message || "Failed to update status");
+    },
+  });
+
+  const handleStatusChange = (activity: NonNullable<typeof activities>[number], newStatus: string) => {
+    updateStatusMutation.mutate({
+      id: activity.id,
+      patientId: activity.patientId,
+      activityTypeId: activity.activityTypeId,
+      title: activity.title,
+      startTime: new Date(activity.startTime),
+      endTime: new Date(activity.endTime),
+      status: newStatus as any,
+    });
+  };
+
+  const exportToCSV = () => {
+    if (!filteredActivities.length) {
+      toast.error("No activities to export");
+      return;
+    }
+
+    const headers = ["Title", "Patient", "MRN", "Status", "Start Time", "End Time", "Type", "Notes"];
+    const rows = filteredActivities.map((a) => [
+      a.title,
+      getPatientName(a.patientId),
+      getPatientMRN(a.patientId),
+      a.status || "",
+      new Date(a.startTime).toLocaleString(),
+      new Date(a.endTime).toLocaleString(),
+      getActivityTypeName(a.activityTypeId),
+      a.notes || "",
+    ]);
+
+    const csvContent = [
+      headers.join(","),
+      ...rows.map((row) => row.map((cell) => `"${cell}"`).join(",")),
+    ].join("\n");
+
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `schedule_${new Date().toISOString().split("T")[0]}.csv`;
+    link.click();
+    toast.success("Schedule exported to CSV");
+  };
+
+  const handleEdit = (activity: NonNullable<typeof activities>[number]) => {
+    // Navigate to Calendar with activity ID for editing
+    navigate(`/calendar?edit=${activity.id}`);
+  };
+
+  const handleDelete = (id: number) => {
+    setDeletingActivityId(id);
+    setDeleteDialogOpen(true);
+  };
+
+  const confirmDelete = () => {
+    if (deletingActivityId) {
+      deleteMutation.mutate({ id: deletingActivityId });
+    }
+  };
+
+  const handleNewActivity = () => {
+    navigate('/calendar?new=1');
+  };
 
   const filteredActivities = activities?.filter((a) => {
     if (searchTerm && !a.title.toLowerCase().includes(searchTerm.toLowerCase())) return false;
     if (filterStatus && a.status !== filterStatus) return false;
     if (filterPatient && a.patientId !== parseInt(filterPatient)) return false;
-    if (filterActivityType && a.activityTypeId !== parseInt(filterActivityType)) return false;
-    if (filterPMD && a.pmdId?.toString() !== filterPMD) return false;
-    if (filterSedationist && a.sedationistId?.toString() !== filterSedationist) return false;
+    if (filterSedation === "yes" && (!a.sedationType || a.sedationType === "None")) return false;
+    if (filterSedation === "no" && a.sedationType && a.sedationType !== "None") return false;
     return true;
   }) || [];
 
@@ -51,6 +147,12 @@ export default function Schedule() {
     return type?.name || "Unknown Type";
   };
 
+  const getStaffName = (staffId: number | null | undefined) => {
+    if (!staffId) return null;
+    const staffMember = staff?.find((s) => s.id === staffId);
+    return staffMember?.name || null;
+  };
+
   const statusColors: Record<string, string> = {
     Requested: "bg-purple-100 text-purple-800",
     Scheduled: "bg-blue-100 text-blue-800",
@@ -69,28 +171,30 @@ export default function Schedule() {
     <SchedulerLayout>
       <div className="space-y-6">
         {/* Header */}
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
             <h1 className="text-3xl font-bold text-foreground">Schedule</h1>
             <p className="text-muted-foreground mt-1">Manage patient activities and appointments</p>
           </div>
-          <Button onClick={() => navigate("/calendar?new=1")} className="flex items-center gap-2">
-            <Plus size={20} />
-            Schedule New Activity
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={exportToCSV} className="flex items-center gap-2">
+              <Download size={18} />
+              Export CSV
+            </Button>
+            <Button onClick={handleNewActivity} className="flex items-center gap-2">
+              <Plus size={20} />
+              New Activity
+            </Button>
+          </div>
         </div>
 
         {/* Filters */}
-        <Card className="p-4 space-y-4">
-          <div className="flex items-center gap-2 mb-2">
-            <Search size={20} className="text-accent" />
-            <h3 className="font-semibold text-foreground">Filters</h3>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-3">
+        <Card className="p-4">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
             <div>
               <label className="block text-xs font-medium text-foreground mb-1">Search</label>
               <Input
-                placeholder="Search..."
+                placeholder="Search by title..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className="text-sm"
@@ -101,9 +205,9 @@ export default function Schedule() {
               <select
                 value={filterStatus}
                 onChange={(e) => setFilterStatus(e.target.value)}
-                className="w-full px-2 py-1 border border-border rounded-md text-sm"
+                className="w-full px-2 py-2 border border-border rounded-md text-sm"
               >
-                <option value="">All</option>
+                <option value="">All Statuses</option>
                 <option value="Requested">Requested</option>
                 <option value="Scheduled">Scheduled</option>
                 <option value="Confirmed">Confirmed</option>
@@ -117,9 +221,9 @@ export default function Schedule() {
               <select
                 value={filterPatient}
                 onChange={(e) => setFilterPatient(e.target.value)}
-                className="w-full px-2 py-1 border border-border rounded-md text-sm"
+                className="w-full px-2 py-2 border border-border rounded-md text-sm"
               >
-                <option value="">All</option>
+                <option value="">All Patients</option>
                 {patients?.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.firstName} {p.lastName}
@@ -128,37 +232,16 @@ export default function Schedule() {
               </select>
             </div>
             <div>
-              <label className="block text-xs font-medium text-foreground mb-1">Activity Type</label>
+              <label className="block text-xs font-medium text-foreground mb-1">Sedation</label>
               <select
-                value={filterActivityType}
-                onChange={(e) => setFilterActivityType(e.target.value)}
-                className="w-full px-2 py-1 border border-border rounded-md text-sm"
+                value={filterSedation}
+                onChange={(e) => setFilterSedation(e.target.value)}
+                className="w-full px-2 py-2 border border-border rounded-md text-sm"
               >
                 <option value="">All</option>
-                {activityTypes?.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
-                  </option>
-                ))}
+                <option value="yes">Yes</option>
+                <option value="no">No</option>
               </select>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-foreground mb-1">PMD ID</label>
-              <Input
-                placeholder="PMD ID"
-                value={filterPMD}
-                onChange={(e) => setFilterPMD(e.target.value)}
-                className="text-sm"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-foreground mb-1">Sedationist ID</label>
-              <Input
-                placeholder="Sedationist ID"
-                value={filterSedationist}
-                onChange={(e) => setFilterSedationist(e.target.value)}
-                className="text-sm"
-              />
             </div>
           </div>
         </Card>
@@ -179,9 +262,26 @@ export default function Schedule() {
                     {/* Header Row */}
                     <div className="flex items-center gap-3 mb-3 flex-wrap">
                       <h3 className="text-lg font-semibold text-foreground">{activity.title}</h3>
-                      <span className={`px-3 py-1 rounded-full text-sm font-medium ${getStatusColor(activity.status)}`}>
-                        {activity.status}
-                      </span>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button className={`px-3 py-1 rounded-full text-sm font-medium flex items-center gap-1 ${getStatusColor(activity.status)} hover:opacity-80 transition-opacity`}>
+                            {activity.status}
+                            <ChevronDown size={14} />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent>
+                          {["Requested", "Scheduled", "Confirmed", "In Progress", "Completed", "Cancelled"].map((status) => (
+                            <DropdownMenuItem
+                              key={status}
+                              onClick={() => handleStatusChange(activity, status)}
+                              className={activity.status === status ? "bg-muted" : ""}
+                            >
+                              <span className={`w-2 h-2 rounded-full mr-2 ${statusColors[status]?.split(" ")[0] || "bg-gray-100"}`} />
+                              {status}
+                            </DropdownMenuItem>
+                          ))}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                       {activity.intervention && (
                         <span className="px-3 py-1 rounded-full text-sm font-medium bg-teal-100 text-teal-800">
                           {activity.intervention}
@@ -239,26 +339,28 @@ export default function Schedule() {
                     </div>
 
                     {/* Clinical Staff */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3 text-sm">
-                      {activity.pmdId && (
-                        <div className="flex items-center gap-2 bg-blue-50 p-2 rounded">
-                          <Stethoscope size={16} className="text-blue-600" />
-                          <div>
-                            <p className="text-blue-600 text-xs font-medium">PMD</p>
-                            <p className="font-semibold text-blue-900">Staff ID: {activity.pmdId}</p>
+                    {(getStaffName(activity.pmdId) || getStaffName(activity.sedationistId)) && (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3 text-sm">
+                        {getStaffName(activity.pmdId) && (
+                          <div className="flex items-center gap-2 bg-green-50 p-2 rounded">
+                            <Stethoscope size={16} className="text-green-600" />
+                            <div>
+                              <p className="text-green-600 text-xs font-medium">PMD/Attending</p>
+                              <p className="font-semibold text-green-900">{getStaffName(activity.pmdId)}</p>
+                            </div>
                           </div>
-                        </div>
-                      )}
-                      {activity.sedationistId && (
-                        <div className="flex items-center gap-2 bg-purple-50 p-2 rounded">
-                          <Droplet size={16} className="text-purple-600" />
-                          <div>
-                            <p className="text-purple-600 text-xs font-medium">Sedationist</p>
-                            <p className="font-semibold text-purple-900">Staff ID: {activity.sedationistId}</p>
+                        )}
+                        {getStaffName(activity.sedationistId) && (
+                          <div className="flex items-center gap-2 bg-purple-50 p-2 rounded">
+                            <Droplet size={16} className="text-purple-600" />
+                            <div>
+                              <p className="text-purple-600 text-xs font-medium">Sedation MD</p>
+                              <p className="font-semibold text-purple-900">{getStaffName(activity.sedationistId)}</p>
+                            </div>
                           </div>
-                        </div>
-                      )}
-                    </div>
+                        )}
+                      </div>
+                    )}
 
                     {/* Notes */}
                     {activity.notes && (
@@ -270,10 +372,18 @@ export default function Schedule() {
 
                   {/* Action Buttons */}
                   <div className="flex gap-2 ml-4">
-                    <button className="p-2 hover:bg-muted rounded transition-colors" title="Edit">
+                    <button
+                      onClick={() => handleEdit(activity)}
+                      className="p-2 hover:bg-muted rounded transition-colors"
+                      title="Edit"
+                    >
                       <Edit2 size={16} className="text-accent" />
                     </button>
-                    <button className="p-2 hover:bg-muted rounded transition-colors" title="Delete">
+                    <button
+                      onClick={() => handleDelete(activity.id)}
+                      className="p-2 hover:bg-muted rounded transition-colors"
+                      title="Delete"
+                    >
                       <Trash2 size={16} className="text-destructive" />
                     </button>
                   </div>
@@ -287,6 +397,15 @@ export default function Schedule() {
           )}
         </div>
       </div>
+
+      <DeleteConfirmDialog
+        open={deleteDialogOpen}
+        onOpenChange={setDeleteDialogOpen}
+        onConfirm={confirmDelete}
+        title="Delete Activity"
+        description="Are you sure you want to delete this activity? This action cannot be undone."
+        isLoading={deleteMutation.isPending}
+      />
     </SchedulerLayout>
   );
 }

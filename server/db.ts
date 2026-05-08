@@ -1,15 +1,27 @@
-import { eq, or, inArray } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/mysql2";
+import { eq, or, inArray, sql } from "drizzle-orm";
+import { drizzle as drizzleNeon } from "drizzle-orm/neon-http";
+import { drizzle as drizzlePg } from "drizzle-orm/node-postgres";
+import { neon } from "@neondatabase/serverless";
 import { InsertUser, users, patients, InsertPatient, activities, InsertActivity, rooms, activityTypes, auditLogs, InsertAuditLog, staffSpecializations } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
-let _db: ReturnType<typeof drizzle> | null = null;
+let _db: ReturnType<typeof drizzleNeon> | ReturnType<typeof drizzlePg> | null = null;
+
+// Detect if running in serverless environment (Vercel, AWS Lambda, etc.)
+const isServerless = !!(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
 
 // Lazily create the drizzle instance so local tooling can run without a DB.
 export async function getDb() {
   if (!_db && process.env.DATABASE_URL) {
     try {
-      _db = drizzle(process.env.DATABASE_URL);
+      if (isServerless) {
+        // Use Neon serverless driver for Vercel/Lambda
+        const sql = neon(process.env.DATABASE_URL);
+        _db = drizzleNeon(sql);
+      } else {
+        // Use node-postgres for local development
+        _db = drizzlePg(process.env.DATABASE_URL);
+      }
     } catch (error) {
       console.warn("[Database] Failed to connect:", error);
       _db = null;
@@ -68,7 +80,9 @@ export async function upsertUser(user: InsertUser): Promise<void> {
       updateSet.lastSignedIn = new Date();
     }
 
-    await db.insert(users).values(values).onDuplicateKeyUpdate({
+    // PostgreSQL uses onConflictDoUpdate instead of onDuplicateKeyUpdate
+    await db.insert(users).values(values).onConflictDoUpdate({
+      target: users.openId,
       set: updateSet,
     });
   } catch (error) {
@@ -115,15 +129,21 @@ export async function getPatientByMRN(mrn: string) {
 export async function createPatient(data: InsertPatient) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  const result = await db.insert(patients).values(data);
-  // Return the inserted ID
-  return { insertId: (result as any)[0]?.insertId };
+  // PostgreSQL returns rows directly with RETURNING clause
+  const result = await db.insert(patients).values(data).returning({ id: patients.id });
+  return { insertId: result[0]?.id };
 }
 
 export async function updatePatient(id: number, data: Partial<InsertPatient>) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
   return db.update(patients).set(data).where(eq(patients.id, id));
+}
+
+export async function deletePatient(id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return db.delete(patients).where(eq(patients.id, id));
 }
 
 /**
@@ -180,6 +200,12 @@ export async function updateActivity(id: number, data: Partial<InsertActivity>) 
   return db.update(activities).set(data).where(eq(activities.id, id));
 }
 
+export async function deleteActivity(id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return db.delete(activities).where(eq(activities.id, id));
+}
+
 /**
  * ROOM QUERIES
  */
@@ -194,6 +220,30 @@ export async function getRoomById(id: number) {
   if (!db) return undefined;
   const result = await db.select().from(rooms).where(eq(rooms.id, id)).limit(1);
   return result.length > 0 ? result[0] : undefined;
+}
+
+export async function createRoom(data: { name: string; type: string; capacity?: number; isActive?: number }) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  const result = await db.insert(rooms).values({
+    name: data.name,
+    type: data.type as any,
+    capacity: data.capacity || 1,
+    isActive: data.isActive ?? 1,
+  }).returning({ id: rooms.id });
+  return { insertId: result[0]?.id };
+}
+
+export async function updateRoom(id: number, data: Partial<{ name: string; type: string; capacity: number; isActive: number }>) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return db.update(rooms).set(data as any).where(eq(rooms.id, id));
+}
+
+export async function deleteRoom(id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  return db.delete(rooms).where(eq(rooms.id, id));
 }
 
 /**
@@ -264,13 +314,29 @@ export async function createStaffMember(name: string, specialization?: string) {
   // Generate a unique openId for the new staff
   const openId = `staff-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
+  // Auto-add credential suffix based on specialization
+  let formattedName = name.trim();
+  const nurseRoles = ["Nurse"];
+  const techRoles = ["Technician"];
+
+  // Only add suffix if not already present
+  if (specialization && !formattedName.match(/,\s*(MD|RN|DO)$/i)) {
+    if (nurseRoles.includes(specialization)) {
+      formattedName = `${formattedName}, RN`;
+    } else if (!techRoles.includes(specialization)) {
+      // All other medical staff get MD
+      formattedName = `${formattedName}, MD`;
+    }
+  }
+
+  // PostgreSQL returns rows directly with RETURNING clause
   const result = await db.insert(users).values({
     openId,
-    name,
+    name: formattedName,
     role: "staff",
-  });
+  }).returning({ id: users.id });
 
-  const insertId = (result as any)[0]?.insertId;
+  const insertId = result[0]?.id;
 
   // Add specialization if provided
   if (specialization && insertId) {
@@ -283,5 +349,3 @@ export async function createStaffMember(name: string, specialization?: string) {
 
   return { insertId };
 }
-
-// TODO: add feature queries here as your schema grows.

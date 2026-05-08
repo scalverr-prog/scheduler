@@ -5,13 +5,56 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { useState } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Search, Edit2, Eye, Plus } from "lucide-react";
+import { Search, Edit2, Eye, Plus, Trash2 } from "lucide-react";
 import { useLocation } from "wouter";
+import PatientModal from "@/components/PatientModal";
+import DeleteConfirmDialog from "@/components/DeleteConfirmDialog";
+import { toast } from "sonner";
 
 export default function Patients() {
   const [, navigate] = useLocation();
+  const utils = trpc.useUtils();
   const { data: patients, isLoading } = trpc.patients.list.useQuery();
   const [searchTerm, setSearchTerm] = useState("");
+
+  // Modal states
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingPatient, setEditingPatient] = useState<typeof patients extends (infer T)[] | undefined ? T | null : null>(null);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deletingPatientId, setDeletingPatientId] = useState<number | null>(null);
+
+  const deleteMutation = trpc.patients.delete.useMutation({
+    onSuccess: () => {
+      toast.success("Patient deleted successfully");
+      utils.patients.list.invalidate();
+      setDeleteDialogOpen(false);
+      setDeletingPatientId(null);
+    },
+    onError: (error) => {
+      toast.error(error.message || "Failed to delete patient");
+    },
+  });
+
+  const handleEdit = (patient: NonNullable<typeof patients>[number]) => {
+    setEditingPatient(patient);
+    setIsModalOpen(true);
+  };
+
+  const handleDelete = (id: number) => {
+    setDeletingPatientId(id);
+    setDeleteDialogOpen(true);
+  };
+
+  const confirmDelete = () => {
+    if (deletingPatientId) {
+      deleteMutation.mutate({ id: deletingPatientId });
+    }
+  };
+
+  const handleNewPatient = () => {
+    setEditingPatient(null);
+    setIsModalOpen(true);
+  };
 
   const filteredPatients = patients?.filter(
     (p) =>
@@ -29,9 +72,9 @@ export default function Patients() {
             <h1 className="text-3xl font-bold text-foreground">Patients</h1>
             <p className="text-muted-foreground mt-1">View patient records</p>
           </div>
-          <Button onClick={() => navigate('/calendar?new=1')} className="flex items-center gap-2">
+          <Button onClick={handleNewPatient} className="flex items-center gap-2">
             <Plus size={18} />
-            Schedule New Activity
+            Add Patient
           </Button>
         </div>
 
@@ -125,14 +168,25 @@ export default function Patients() {
                     <td className="py-3 px-4">
                       <div className="flex gap-2">
                         <button
-                          onClick={() => navigate(`/patient/${patient.id}`)}
+                          onClick={() => navigate(`/timeline?patientId=${patient.id}`)}
                           className="p-2 hover:bg-muted rounded transition-colors"
                           title="View Timeline"
                         >
                           <Eye size={16} className="text-blue-600" />
                         </button>
-                        <button className="p-2 hover:bg-muted rounded transition-colors" title="Edit">
+                        <button
+                          onClick={() => handleEdit(patient)}
+                          className="p-2 hover:bg-muted rounded transition-colors"
+                          title="Edit"
+                        >
                           <Edit2 size={16} className="text-gray-600" />
+                        </button>
+                        <button
+                          onClick={() => handleDelete(patient.id)}
+                          className="p-2 hover:bg-muted rounded transition-colors"
+                          title="Delete"
+                        >
+                          <Trash2 size={16} className="text-destructive" />
                         </button>
                       </div>
                     </td>
@@ -144,15 +198,31 @@ export default function Patients() {
             <div className="text-center py-8">
               <p className="text-muted-foreground mb-4">No patients found</p>
               <p className="text-sm text-muted-foreground">
-                Add patients by scheduling a new activity
+                Add a new patient to get started
               </p>
-              <Button onClick={() => navigate('/calendar?new=1')} className="mt-4">
-                Schedule New Activity
+              <Button onClick={handleNewPatient} className="mt-4">
+                <Plus size={18} className="mr-2" />
+                Add Patient
               </Button>
             </div>
           )}
         </Card>
       </div>
+
+      <PatientModal
+        open={isModalOpen}
+        onOpenChange={setIsModalOpen}
+        patient={editingPatient}
+      />
+
+      <DeleteConfirmDialog
+        open={deleteDialogOpen}
+        onOpenChange={setDeleteDialogOpen}
+        onConfirm={confirmDelete}
+        title="Delete Patient"
+        description="Are you sure you want to delete this patient? This will also affect related activities. This action cannot be undone."
+        isLoading={deleteMutation.isPending}
+      />
     </SchedulerLayout>
   );
 }

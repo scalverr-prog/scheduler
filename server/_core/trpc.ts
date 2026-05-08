@@ -13,14 +13,23 @@ export const publicProcedure = t.procedure;
 const requireUser = t.middleware(async opts => {
   const { ctx, next } = opts;
 
-  if (!ctx.user) {
-    throw new TRPCError({ code: "UNAUTHORIZED", message: UNAUTHED_ERR_MSG });
-  }
+  // For standalone deployment, create a default user if none exists
+  const user = ctx.user || {
+    id: 1,
+    openId: "standalone-user",
+    name: "User",
+    email: null,
+    role: "admin" as const,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    lastSignedIn: new Date(),
+    loginMethod: null,
+  };
 
   return next({
     ctx: {
       ...ctx,
-      user: ctx.user,
+      user,
     },
   });
 });

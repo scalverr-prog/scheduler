@@ -2,6 +2,7 @@ import SchedulerLayout from "@/components/SchedulerLayout";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { CreatableSelect } from "@/components/ui/creatable-select";
 import { useState, useEffect } from "react";
 import { useLocation, useSearch } from "wouter";
 import { ChevronLeft, ChevronRight, X, Plus, AlertCircle, Syringe, Stethoscope, UserPlus, Search } from "lucide-react";
@@ -30,8 +31,27 @@ const SERVICE_COLORS: Record<string, string> = {
 };
 
 const CASE_TYPES = ["All Types", "Procedure", "Direct Admit", "Consultation", "Follow-up"];
-const SEDATION_TYPES = ["All Sedation", "None", "Conscious Sedation", "Moderate Sedation", "MAC", "General Anesthesia"];
+const SEDATION_TYPES = ["All", "Anesthesia", "Intensivist"];
 const PRIORITIES = ["All Priorities", "Planned", "Routine", "Urgent", "Emergent", "Add-On"];
+
+// Procedure type categories for grouped display
+const PROCEDURE_CATEGORIES: Record<string, string[]> = {
+  "Oncology": ["LP", "BMA", "BMBx", "IT Chemo"],
+  "Vascular Access": ["PICC", "Central Line", "Port Access", "Port Placement"],
+  "Imaging/Sedation": ["Sedated MRI", "Sedated CT", "Sedated Echo", "Sedated Procedure"],
+  "GI/Pulmonary": ["EGD", "Colonoscopy", "Bronchoscopy", "Paracentesis", "Thoracentesis"],
+  "Interventional": ["IR Procedure", "Biopsy", "Drain Placement", "Drain Removal", "Chest Tube Placement"],
+  "General": ["Bedside Procedure", "Wound Care", "Dressing Change", "Scheduled Activity"],
+  "Administrative": ["Direct Admit", "Consultation", "Follow-up", "Other"],
+};
+
+// Get category for a procedure type
+const getProcedureCategory = (name: string): string => {
+  for (const [category, procedures] of Object.entries(PROCEDURE_CATEGORIES)) {
+    if (procedures.includes(name)) return category;
+  }
+  return "Other";
+};
 
 const INTERVENTIONS = [
   "Lumbar Puncture",
@@ -78,11 +98,13 @@ const ACTIVITY_TITLES = [
   "Other",
 ];
 
-const PMD_SERVICES = [
+const PRIMARY_SERVICES = [
   "Oncology",
   "Hematology",
   "Heme/Onc",
+  "General Pediatrics",
   "Peds Surgery",
+  "Peds HBS",
   "General Surgery",
   "Ophthalmology",
   "Orthopedics",
@@ -108,12 +130,48 @@ const PMD_SERVICES = [
   "Other",
 ];
 
+// Auto-fill mapping: Primary Service -> Service
+const PRIMARY_TO_SERVICE: Record<string, string> = {
+  "Oncology": "Oncology",
+  "Hematology": "Oncology",
+  "Heme/Onc": "Oncology",
+  "General Pediatrics": "Other",
+  "Peds Surgery": "General Surgery",
+  "Peds HBS": "General Surgery",
+  "General Surgery": "General Surgery",
+  "Ophthalmology": "Other",
+  "Orthopedics": "Orthopedics",
+  "Neurosurgery": "Neurology",
+  "Neurology": "Neurology",
+  "Cardiology": "Cardiology",
+  "Cardiac Surgery": "Cardiology",
+  "Pulmonology": "Pulmonary",
+  "GI": "GI",
+  "ENT": "ENT",
+  "Urology": "Urology",
+  "Nephrology": "Other",
+  "Rheumatology": "Other",
+  "Endocrinology": "Other",
+  "Infectious Disease": "Other",
+  "PICU": "Other",
+  "NICU": "Other",
+  "Hospitalist": "Other",
+  "Pain Management": "Pain Management",
+  "Interventional Radiology": "Radiology",
+  "Radiology": "Radiology",
+  "Anesthesia": "Other",
+};
+
 export default function Calendar() {
   const { data: activities, refetch: refetchActivities } = trpc.activities.list.useQuery();
   const { data: patients, refetch: refetchPatients } = trpc.patients.list.useQuery();
   const { data: rooms } = trpc.activities.getRooms.useQuery();
   const { data: staff } = trpc.activities.getStaff.useQuery();
   const { data: activityTypes } = trpc.activities.getActivityTypes.useQuery();
+
+  // State for editing an activity
+  const [editingActivityId, setEditingActivityId] = useState<number | null>(null);
+  const [showNewProcedure, setShowNewProcedure] = useState(false);
 
   const createPatient = trpc.patients.create.useMutation();
   const createStaff = trpc.activities.createStaff.useMutation();
@@ -122,6 +180,7 @@ export default function Calendar() {
       refetchActivities();
       refetchPatients();
       setShowNewProcedure(false);
+      setEditingActivityId(null);
       resetForm();
     },
   });
@@ -130,6 +189,9 @@ export default function Calendar() {
     onSuccess: () => {
       refetchActivities();
       setSelectedActivity(null);
+      setShowNewProcedure(false);
+      setEditingActivityId(null);
+      resetForm();
     },
   });
 
@@ -138,27 +200,27 @@ export default function Calendar() {
   // Patient mode: "existing" or "new"
   const [patientMode, setPatientMode] = useState<"existing" | "new">("existing");
 
-  // Form state for new case
+  // Form state for new case - defaults match Oncology service
   const [formPatientId, setFormPatientId] = useState<number | "">("");
-  const [formTitle, setFormTitle] = useState("");
-  const [formService, setFormService] = useState("Other");
+  const [formTitle, setFormTitle] = useState("LP");
+  const [formService, setFormService] = useState("Oncology");
   const [formCaseType, setFormCaseType] = useState("Procedure");
-  const [formPriority, setFormPriority] = useState("Routine");
+  const [formPriority, setFormPriority] = useState("Planned");
   const [formRoomId, setFormRoomId] = useState<number | "">("");
   const [formStartDate, setFormStartDate] = useState("");
   const [formStartTime, setFormStartTime] = useState("");
   const [formEndTime, setFormEndTime] = useState("");
-  const [formSedationRequired, setFormSedationRequired] = useState(false);
-  const [formSedationType, setFormSedationType] = useState("None");
-  const [formSedationProvider, setFormSedationProvider] = useState("None");
+  const [formSedationRequired, setFormSedationRequired] = useState(true);
+  const [formSedationType, setFormSedationType] = useState("Conscious Sedation");
+  const [formSedationProvider, setFormSedationProvider] = useState("Intensivist");
   const [formSedationistId, setFormSedationistId] = useState<number | "">("");
   const [formPmdId, setFormPmdId] = useState<number | "">("");
-  const [formIntervention, setFormIntervention] = useState("");
+  const [formIntervention, setFormIntervention] = useState("Lumbar Puncture");
   const [formNotes, setFormNotes] = useState("");
-  const [formActivityTypeId, setFormActivityTypeId] = useState<number | "">(""); // LP, BMA, PICC, IR
+  const [formActivityTypeIds, setFormActivityTypeIds] = useState<number[]>([]); // LP, BMA, PICC, IR - multiple allowed
   const [formStatus, setFormStatus] = useState("Pending");
   const [formOtherIntervention, setFormOtherIntervention] = useState("");
-  const [formPmdService, setFormPmdService] = useState("");
+  const [formPmdService, setFormPmdService] = useState("Oncology");
 
   // New patient form fields
   const [newPatientMrn, setNewPatientMrn] = useState("");
@@ -173,29 +235,55 @@ export default function Calendar() {
   const [newProcedureMDName, setNewProcedureMDName] = useState("");
   const [showNewSedationMD, setShowNewSedationMD] = useState(false);
   const [newSedationMDName, setNewSedationMDName] = useState("");
+  const [showProcedureDropdown, setShowProcedureDropdown] = useState(false);
+
+  // Custom dropdown options (user-added values) - persisted to localStorage
+  const [customTitles, setCustomTitles] = useState<string[]>(() => {
+    const saved = localStorage.getItem('customTitles');
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [customServices, setCustomServices] = useState<string[]>(() => {
+    const saved = localStorage.getItem('customServices');
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [customInterventions, setCustomInterventions] = useState<string[]>(() => {
+    const saved = localStorage.getItem('customInterventions');
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  // Save custom options to localStorage when they change
+  useEffect(() => {
+    localStorage.setItem('customTitles', JSON.stringify(customTitles));
+  }, [customTitles]);
+  useEffect(() => {
+    localStorage.setItem('customServices', JSON.stringify(customServices));
+  }, [customServices]);
+  useEffect(() => {
+    localStorage.setItem('customInterventions', JSON.stringify(customInterventions));
+  }, [customInterventions]);
 
   const resetForm = () => {
     setPatientMode("existing");
     setFormPatientId("");
-    setFormTitle("");
-    setFormService("Other");
+    setFormTitle("LP");
+    setFormService("Oncology");
     setFormCaseType("Procedure");
-    setFormPriority("Routine");
+    setFormPriority("Planned");
     setFormRoomId("");
     setFormStartDate("");
     setFormStartTime("");
     setFormEndTime("");
-    setFormSedationRequired(false);
-    setFormSedationType("None");
-    setFormSedationProvider("None");
+    setFormSedationRequired(true);
+    setFormSedationType("Conscious Sedation");
+    setFormSedationProvider("Intensivist");
     setFormSedationistId("");
     setFormPmdId("");
-    setFormIntervention("");
+    setFormIntervention("Lumbar Puncture");
     setFormNotes("");
-    setFormActivityTypeId("");
+    setFormActivityTypeIds([]);
     setFormStatus("Pending");
     setFormOtherIntervention("");
-    setFormPmdService("");
+    setFormPmdService("Oncology");
     // Reset new patient fields
     setNewPatientMrn("");
     setNewPatientFirstName("");
@@ -213,18 +301,19 @@ export default function Calendar() {
   // Filter staff by specialization
   const sedationists = staff?.filter(s =>
     s.specializations?.includes("Sedationist") ||
-    s.specializations?.includes("Anesthesiologist")
+    s.specializations?.includes("Anesthesiologist") ||
+    s.specializations?.includes("Intensivist")
   ) || [];
 
   const physicians = staff?.filter(s =>
     s.specializations?.includes("PMD") ||
-    s.role === "admin"
+    s.specializations?.includes("Oncology") ||
+    s.specializations?.includes("Peds-Surgery")
   ) || [];
 
   const [viewType, setViewType] = useState<ViewType>("day");
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedActivity, setSelectedActivity] = useState<any>(null);
-  const [showNewProcedure, setShowNewProcedure] = useState(false);
   const [selectedActivities, setSelectedActivities] = useState<Set<number>>(new Set());
   const [multiSelectMode, setMultiSelectMode] = useState(false);
 
@@ -265,23 +354,65 @@ export default function Calendar() {
   const [, navigate] = useLocation();
   const searchString = useSearch();
 
-  // Auto-open form if ?new=1 in URL
+  // Auto-open form if ?new=1 or ?edit=ID in URL
   useEffect(() => {
-    if (searchString.includes("new=1")) {
+    const params = new URLSearchParams(searchString);
+
+    if (params.get("new") === "1") {
+      setEditingActivityId(null);
       setShowNewProcedure(true);
-      // Clear the query param from URL
       navigate("/calendar", { replace: true });
     }
-  }, [searchString, navigate]);
+
+    const editId = params.get("edit");
+    if (editId) {
+      const activity = activities?.find(a => a.id === Number(editId));
+      if (activity) {
+        // Populate form with activity data
+        setFormPatientId(activity.patientId);
+        setFormTitle(activity.title || "");
+        setFormService(activity.service || "Other");
+        setFormCaseType(activity.caseType || "Procedure");
+        setFormPriority(activity.priority || "Routine");
+        setFormRoomId(activity.roomId || "");
+        setFormStartDate(new Date(activity.startTime).toISOString().split("T")[0]);
+        setFormStartTime(new Date(activity.startTime).toTimeString().slice(0, 5));
+        setFormEndTime(new Date(activity.endTime).toTimeString().slice(0, 5));
+        setFormSedationRequired(activity.sedationType !== "None" && activity.sedationType !== null);
+        setFormSedationType(activity.sedationType || "None");
+        setFormSedationProvider(activity.sedationProvider || "None");
+        setFormSedationistId(activity.sedationistId || "");
+        setFormPmdId(activity.pmdId || "");
+        setFormIntervention(activity.intervention || "");
+        setFormNotes(activity.notes || "");
+        setFormActivityTypeIds([activity.activityTypeId]);
+        setFormStatus(activity.status || "Pending");
+        setPatientMode("existing");
+        setEditingActivityId(activity.id);
+        setShowNewProcedure(true);
+        navigate("/calendar", { replace: true });
+      }
+    }
+  }, [searchString, navigate, activities]);
 
   // Filters
   const [filterService, setFilterService] = useState("All Services");
   const [filterCaseType, setFilterCaseType] = useState("All Types");
-  const [filterSedation, setFilterSedation] = useState("All Sedation");
+  const [filterSedation, setFilterSedation] = useState("All");
   const [filterPriority, setFilterPriority] = useState("All Priorities");
   const [searchQuery, setSearchQuery] = useState("");
+  const [showSearchResults, setShowSearchResults] = useState(false);
   const [filterDoctor, setFilterDoctor] = useState<number | "all">("all");
   const [filterDateRange, setFilterDateRange] = useState<"day" | "week" | "month" | "all">("all");
+
+  // Auto-filter by doctor if ?doctor=ID in URL (for "My Cases")
+  useEffect(() => {
+    const params = new URLSearchParams(searchString);
+    const doctorId = params.get("doctor");
+    if (doctorId && doctorId !== "all") {
+      setFilterDoctor(Number(doctorId));
+    }
+  }, [searchString]);
 
   const getDaysInMonth = (date: Date) => {
     return new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
@@ -342,7 +473,7 @@ export default function Calendar() {
       const matchesDate = actDate === date.toDateString();
       const matchesService = filterService === "All Services" || a.service === filterService;
       const matchesCaseType = filterCaseType === "All Types" || a.caseType === filterCaseType;
-      const matchesSedation = filterSedation === "All Sedation" || a.sedationType === filterSedation;
+      const matchesSedation = filterSedation === "All" || a.sedationProvider === filterSedation;
       const matchesPriority = filterPriority === "All Priorities" || a.priority === filterPriority;
       const matchesDoctor = filterDoctor === "all" || a.pmdId === filterDoctor || a.sedationistId === filterDoctor;
 
@@ -395,7 +526,7 @@ export default function Calendar() {
 
       const matchesService = filterService === "All Services" || a.service === filterService;
       const matchesCaseType = filterCaseType === "All Types" || a.caseType === filterCaseType;
-      const matchesSedation = filterSedation === "All Sedation" || a.sedationType === filterSedation;
+      const matchesSedation = filterSedation === "All" || a.sedationProvider === filterSedation;
       const matchesPriority = filterPriority === "All Priorities" || a.priority === filterPriority;
       const matchesDoctor = filterDoctor === "all" || a.pmdId === filterDoctor || a.sedationistId === filterDoctor;
 
@@ -430,6 +561,12 @@ export default function Calendar() {
 
   const formatTime = (date: Date | string) => {
     return new Date(date).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  };
+
+  const getStaffName = (staffId: number | null | undefined) => {
+    if (!staffId) return null;
+    const staffMember = staff?.find((s) => s.id === staffId);
+    return staffMember?.name || null;
   };
 
   const getSedationIcon = (activity: any) => {
@@ -496,7 +633,12 @@ export default function Calendar() {
             {getSedationIcon(activity)}
             {activity.caseType === "Direct Admit" && <UserPlus size={12} className="text-orange-500" />}
           </div>
-          <div className="truncate text-gray-600">{formatTime(activity.startTime)} - {activity.title}</div>
+          <div className="truncate text-gray-600">
+            {formatTime(activity.startTime)} - {activity.title}
+            {getStaffName(activity.pmdId) && (
+              <span className="ml-1 text-green-600 text-[10px]">({getStaffName(activity.pmdId)?.split(',')[0]})</span>
+            )}
+          </div>
         </button>
       );
     }
@@ -544,6 +686,16 @@ export default function Calendar() {
             <span className="bg-purple-50 text-purple-700 px-2 py-0.5 rounded">{activity.sedationProvider}</span>
           )}
         </div>
+        {(getStaffName(activity.pmdId) || getStaffName(activity.sedationistId)) && (
+          <div className="mt-1 flex items-center gap-2 text-xs">
+            {getStaffName(activity.pmdId) && (
+              <span className="text-green-700 bg-green-50 px-2 py-0.5 rounded">PMD: {getStaffName(activity.pmdId)}</span>
+            )}
+            {getStaffName(activity.sedationistId) && (
+              <span className="text-purple-700 bg-purple-50 px-2 py-0.5 rounded">Sed: {getStaffName(activity.sedationistId)}</span>
+            )}
+          </div>
+        )}
       </button>
     );
   };
@@ -567,7 +719,7 @@ export default function Calendar() {
             onClick={() => {
               setFilterService("All Services");
               setFilterCaseType("All Types");
-              setFilterSedation("All Sedation");
+              setFilterSedation("All");
               setFilterPriority("All Priorities");
               setSearchQuery("");
               setFilterDoctor("all");
@@ -596,34 +748,22 @@ export default function Calendar() {
             <div className="text-xs text-gray-600 font-medium">Direct Admits</div>
           </Card>
           <Card
-            className={`p-3 text-center cursor-pointer hover:shadow-lg transition-all bg-red-50 border-red-200 ${filterSedation === "General Anesthesia" || filterSedation === "MAC" ? "ring-2 ring-red-500" : ""}`}
-            onClick={() => {
-              if (filterSedation === "General Anesthesia") {
-                setFilterSedation("All Sedation");
-              } else {
-                setFilterSedation("General Anesthesia");
-              }
-            }}
+            className={`p-3 text-center cursor-pointer hover:shadow-lg transition-all bg-red-50 border-red-200 ${filterSedation === "Anesthesia" ? "ring-2 ring-red-500" : ""}`}
+            onClick={() => setFilterSedation(filterSedation === "Anesthesia" ? "All" : "Anesthesia")}
           >
             <div className="text-2xl font-bold text-red-600">
               {dayActivities.filter(a => a.sedationProvider === "Anesthesia").length}
             </div>
-            <div className="text-xs text-gray-600 font-medium">Anesthesia</div>
+            <div className="text-xs text-gray-600 font-medium">Anesthesia Cases</div>
           </Card>
           <Card
-            className={`p-3 text-center cursor-pointer hover:shadow-lg transition-all bg-purple-50 border-purple-200 ${filterSedation === "Moderate Sedation" || filterSedation === "Conscious Sedation" ? "ring-2 ring-purple-500" : ""}`}
-            onClick={() => {
-              if (filterSedation === "Moderate Sedation") {
-                setFilterSedation("All Sedation");
-              } else {
-                setFilterSedation("Moderate Sedation");
-              }
-            }}
+            className={`p-3 text-center cursor-pointer hover:shadow-lg transition-all bg-purple-50 border-purple-200 ${filterSedation === "Intensivist" ? "ring-2 ring-purple-500" : ""}`}
+            onClick={() => setFilterSedation(filterSedation === "Intensivist" ? "All" : "Intensivist")}
           >
             <div className="text-2xl font-bold text-purple-600">
               {dayActivities.filter(a => a.sedationProvider === "Intensivist").length}
             </div>
-            <div className="text-xs text-gray-600 font-medium">Intensivist</div>
+            <div className="text-xs text-gray-600 font-medium">Intensivist Cases</div>
           </Card>
         </div>
 
@@ -733,7 +873,23 @@ export default function Calendar() {
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">Procedure & Admit Schedule</h1>
+            <div className="flex items-center gap-3">
+              <h1 className="text-2xl font-bold text-gray-900">Procedure & Admit Schedule</h1>
+              {filterDoctor !== "all" && (
+                <span className="bg-blue-100 text-blue-800 px-3 py-1 rounded-full text-sm font-medium flex items-center gap-1">
+                  📋 My Cases
+                  <button
+                    onClick={() => {
+                      setFilterDoctor("all");
+                      navigate("/calendar", { replace: true });
+                    }}
+                    className="ml-1 hover:text-blue-600"
+                  >
+                    ×
+                  </button>
+                </span>
+              )}
+            </div>
             <p className="text-gray-500 text-sm">Multi-service procedure scheduling with sedation management</p>
           </div>
           <div className="flex items-center gap-2">
@@ -868,76 +1024,94 @@ export default function Calendar() {
                 type="text"
                 placeholder="Search by patient, MRN, doctor, procedure..."
                 value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                onChange={(e) => {
+                  setSearchQuery(e.target.value);
+                  setShowSearchResults(e.target.value.trim().length > 0);
+                }}
+                onFocus={() => setShowSearchResults(searchQuery.trim().length > 0)}
                 className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
               />
               {searchQuery && (
                 <button
-                  onClick={() => setSearchQuery("")}
+                  onClick={() => { setSearchQuery(""); setShowSearchResults(false); }}
                   className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
                 >
                   <X size={16} />
                 </button>
               )}
             </div>
-          </div>
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Service</label>
-              <select
-                value={filterService}
-                onChange={(e) => setFilterService(e.target.value)}
-                className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded-md"
-              >
-                {SERVICES.map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Case Type</label>
-              <select
-                value={filterCaseType}
-                onChange={(e) => setFilterCaseType(e.target.value)}
-                className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded-md"
-              >
-                {CASE_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Sedation</label>
-              <select
-                value={filterSedation}
-                onChange={(e) => setFilterSedation(e.target.value)}
-                className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded-md"
-              >
-                {SEDATION_TYPES.map((t: string) => <option key={t} value={t}>{t}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Priority</label>
-              <select
-                value={filterPriority}
-                onChange={(e) => setFilterPriority(e.target.value)}
-                className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded-md"
-              >
-                {PRIORITIES.map(p => <option key={p} value={p}>{p}</option>)}
-              </select>
-            </div>
-            <div>
-              <button
-                onClick={() => {
-                  setFilterService("All Services");
-                  setFilterCaseType("All Types");
-                  setFilterSedation("All Sedation");
-                  setFilterPriority("All Priorities");
-                  setSearchQuery("");
-                  setFilterDoctor("all");
-                  setFilterDateRange("all");
-                }}
-                className="w-full px-2 py-1.5 text-sm bg-gray-100 hover:bg-gray-200 rounded-md text-gray-600 mt-5"
-              >
-                Clear Filters
-              </button>
-            </div>
+
+            {/* Search Results - Separate from input */}
+            {showSearchResults && searchQuery.trim() && (() => {
+              const query = searchQuery.toLowerCase();
+              const matchingActivities = activities?.filter(a => {
+                const patient = patients?.find(p => p.id === a.patientId);
+                const patientName = patient ? `${patient.firstName} ${patient.lastName}`.toLowerCase() : "";
+                const mrn = patient?.mrn?.toLowerCase() || "";
+                const doctorName = getStaffName(a.pmdId)?.toLowerCase() || "";
+                const sedName = getStaffName(a.sedationistId)?.toLowerCase() || "";
+                return (
+                  a.title.toLowerCase().includes(query) ||
+                  patientName.includes(query) ||
+                  mrn.includes(query) ||
+                  doctorName.includes(query) ||
+                  sedName.includes(query) ||
+                  a.service?.toLowerCase().includes(query) ||
+                  a.intervention?.toLowerCase().includes(query)
+                );
+              }) || [];
+
+              if (matchingActivities.length === 0) return null;
+
+              return (
+                <div className="mt-2 bg-white border-2 border-blue-300 rounded-lg shadow-lg">
+                  <div className="px-4 py-2 bg-blue-500 text-white font-medium rounded-t-lg flex justify-between items-center">
+                    <span>{matchingActivities.length} case{matchingActivities.length !== 1 ? 's' : ''} found</span>
+                    <button onClick={() => setShowSearchResults(false)} className="hover:bg-blue-600 rounded p-1">
+                      <X size={16} />
+                    </button>
+                  </div>
+                  <div className="max-h-64 overflow-y-auto">
+                    {matchingActivities.slice(0, 10).map(activity => {
+                      const patient = getPatientInfo(activity.patientId);
+                      return (
+                        <div
+                          key={activity.id}
+                          className="px-4 py-3 hover:bg-blue-50 border-b border-gray-100 cursor-pointer"
+                          onClick={() => {
+                            setSelectedActivity(activity);
+                            setSearchQuery("");
+                            setShowSearchResults(false);
+                            setCurrentDate(new Date(activity.startTime));
+                          }}
+                        >
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <span className="font-semibold">{activity.title}</span>
+                                <span className={`text-xs px-2 py-0.5 rounded ${
+                                  activity.status === "Confirmed" ? "bg-green-100 text-green-800" :
+                                  activity.status === "In Progress" ? "bg-yellow-100 text-yellow-800" :
+                                  "bg-blue-100 text-blue-800"
+                                }`}>{activity.status}</span>
+                              </div>
+                              <div className="text-sm text-gray-600">{patient.name} ({patient.mrn})</div>
+                              <div className="text-xs text-gray-500 mt-1">
+                                {new Date(activity.startTime).toLocaleDateString()} {formatTime(activity.startTime)}
+                                {getStaffName(activity.pmdId) && (
+                                  <span className="ml-2 text-green-600">PMD: {getStaffName(activity.pmdId)}</span>
+                                )}
+                              </div>
+                            </div>
+                            <div className="text-blue-500 font-medium text-sm">View →</div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         </Card>
 
@@ -999,37 +1173,49 @@ export default function Calendar() {
             </div>
           </div>
 
-          {/* Legend - Clickable to filter */}
-          <div className="flex items-center gap-6 mt-3 pt-3 border-t text-xs">
-            <span className="font-medium text-gray-500">Filter by:</span>
+          {/* Quick Filters */}
+          <div className="flex items-center gap-4 mt-3 pt-3 border-t text-xs">
+            <span className="font-medium text-gray-500">Quick filter:</span>
             <button
               onClick={() => setFilterCaseType(filterCaseType === "Procedure" ? "All Types" : "Procedure")}
-              className={`flex items-center gap-1 px-2 py-1 rounded hover:bg-blue-50 transition-colors ${filterCaseType === "Procedure" ? "bg-blue-100 ring-1 ring-blue-300" : ""}`}
+              className={`flex items-center gap-1 px-2 py-1 rounded hover:bg-green-50 transition-colors ${filterCaseType === "Procedure" ? "bg-green-100 ring-1 ring-green-300" : ""}`}
             >
-              <div className="w-3 h-3 border-l-4 border-l-blue-500 bg-white"></div>
-              <span>Procedure</span>
+              <div className="w-3 h-3 rounded-full bg-green-500"></div>
+              <span>Procedures</span>
             </button>
             <button
               onClick={() => setFilterCaseType(filterCaseType === "Direct Admit" ? "All Types" : "Direct Admit")}
               className={`flex items-center gap-1 px-2 py-1 rounded hover:bg-orange-50 transition-colors ${filterCaseType === "Direct Admit" ? "bg-orange-100 ring-1 ring-orange-300" : ""}`}
             >
-              <div className="w-3 h-3 border-l-4 border-l-orange-500 bg-white"></div>
-              <span>Direct Admit</span>
+              <div className="w-3 h-3 rounded-full bg-orange-500"></div>
+              <span>Direct Admits</span>
             </button>
             <button
-              onClick={() => setFilterSedation(filterSedation === "General Anesthesia" ? "All Sedation" : "General Anesthesia")}
-              className={`flex items-center gap-1 px-2 py-1 rounded hover:bg-red-50 transition-colors ${filterSedation === "General Anesthesia" ? "bg-red-100 ring-1 ring-red-300" : ""}`}
+              onClick={() => setFilterSedation(filterSedation === "Anesthesia" ? "All" : "Anesthesia")}
+              className={`flex items-center gap-1 px-2 py-1 rounded hover:bg-red-50 transition-colors ${filterSedation === "Anesthesia" ? "bg-red-100 ring-1 ring-red-300" : ""}`}
             >
               <Syringe size={12} className="text-red-500" />
               <span>Anesthesia</span>
             </button>
             <button
-              onClick={() => setFilterSedation(filterSedation === "Moderate Sedation" ? "All Sedation" : "Moderate Sedation")}
-              className={`flex items-center gap-1 px-2 py-1 rounded hover:bg-purple-50 transition-colors ${filterSedation === "Moderate Sedation" ? "bg-purple-100 ring-1 ring-purple-300" : ""}`}
+              onClick={() => setFilterSedation(filterSedation === "Intensivist" ? "All" : "Intensivist")}
+              className={`flex items-center gap-1 px-2 py-1 rounded hover:bg-purple-50 transition-colors ${filterSedation === "Intensivist" ? "bg-purple-100 ring-1 ring-purple-300" : ""}`}
             >
-              <Stethoscope size={12} className="text-blue-500" />
+              <Stethoscope size={12} className="text-purple-500" />
               <span>Intensivist</span>
             </button>
+            {(filterCaseType !== "All Types" || filterSedation !== "All" || searchQuery) && (
+              <button
+                onClick={() => {
+                  setFilterCaseType("All Types");
+                  setFilterSedation("All");
+                  setSearchQuery("");
+                }}
+                className="px-2 py-1 text-gray-500 hover:text-gray-700"
+              >
+                Clear all
+              </button>
+            )}
           </div>
         </Card>
 
@@ -1178,11 +1364,11 @@ export default function Calendar() {
                       <div className="space-y-2 text-sm">
                         <div className="flex justify-between">
                           <span className="text-gray-500">Attending/PMD</span>
-                          <span className="font-medium">{selectedActivity.pmdId ? `ID: ${selectedActivity.pmdId}` : "Not assigned"}</span>
+                          <span className="font-medium text-green-700">{getStaffName(selectedActivity.pmdId) || "Not assigned"}</span>
                         </div>
                         <div className="flex justify-between">
-                          <span className="text-gray-500">Sedation</span>
-                          <span className="font-medium">{selectedActivity.sedationistId ? `ID: ${selectedActivity.sedationistId}` : "Not assigned"}</span>
+                          <span className="text-gray-500">Sedation MD</span>
+                          <span className="font-medium text-purple-700">{getStaffName(selectedActivity.sedationistId) || "Not assigned"}</span>
                         </div>
                       </div>
                     </div>
@@ -1298,9 +1484,11 @@ export default function Calendar() {
               <Card className="w-full max-w-3xl">
                 <div className="p-4 sm:p-6 max-h-[85vh] overflow-y-auto">
                 <div className="flex items-start justify-between mb-4">
-                  <h2 className="text-xl font-bold text-gray-900">Schedule New Activity</h2>
+                  <h2 className="text-xl font-bold text-gray-900">
+                    {editingActivityId ? "Edit Activity" : "Schedule New Activity"}
+                  </h2>
                   <button
-                    onClick={() => { setShowNewProcedure(false); resetForm(); }}
+                    onClick={() => { setShowNewProcedure(false); resetForm(); setEditingActivityId(null); }}
                     className="p-1 hover:bg-gray-100 rounded transition-colors"
                   >
                     <X size={24} className="text-gray-500" />
@@ -1323,7 +1511,7 @@ export default function Calendar() {
                     alert("Please fill in date and time");
                     return;
                   }
-                  if (!formActivityTypeId) {
+                  if (formActivityTypeIds.length === 0) {
                     alert("Please select a procedure type (LP, BMA, PICC, IR)");
                     return;
                   }
@@ -1332,7 +1520,7 @@ export default function Calendar() {
                     return;
                   }
                   if (!formPmdService) {
-                    alert("Please select a PMD service");
+                    alert("Please select a Primary service");
                     return;
                   }
 
@@ -1342,6 +1530,26 @@ export default function Calendar() {
 
                   // If new patient, create them first
                   if (patientMode === "new") {
+                    // Check for patients with the same name
+                    const matchingPatients = patients?.filter(p =>
+                      p.firstName.toLowerCase() === newPatientFirstName.toLowerCase() &&
+                      p.lastName.toLowerCase() === newPatientLastName.toLowerCase()
+                    ) || [];
+
+                    if (matchingPatients.length > 0) {
+                      const patientList = matchingPatients.map(p =>
+                        `- ${p.firstName} ${p.lastName} (MRN: ${p.mrn}, DOB: ${p.dateOfBirth ? new Date(p.dateOfBirth).toLocaleDateString() : "N/A"})`
+                      ).join("\n");
+
+                      const confirmed = window.confirm(
+                        `⚠️ Possible Duplicate Patient!\n\nPatients with the same name already exist:\n\n${patientList}\n\nDo you want to create a new patient anyway?`
+                      );
+
+                      if (!confirmed) {
+                        return;
+                      }
+                    }
+
                     try {
                       const result = await createPatient.mutateAsync({
                         mrn: newPatientMrn,
@@ -1391,9 +1599,63 @@ export default function Calendar() {
                   const startDateTime = new Date(`${formStartDate}T${formStartTime}`);
                   const endDateTime = new Date(`${formStartDate}T${formEndTime}`);
 
-                  // Get procedure type name for the title
-                  const selectedProcedureType = activityTypes?.find(t => t.id === formActivityTypeId);
-                  const procedureTitle = formTitle || selectedProcedureType?.name || "Scheduled Activity";
+                  // Check for overlapping activities at the same time
+                  const overlappingActivities = activities?.filter(a => {
+                    // Skip the activity being edited
+                    if (editingActivityId && a.id === editingActivityId) return false;
+
+                    const actStart = new Date(a.startTime);
+                    const actEnd = new Date(a.endTime);
+
+                    // Check if times overlap
+                    return (startDateTime < actEnd && endDateTime > actStart);
+                  }) || [];
+
+                  if (overlappingActivities.length > 0) {
+                    const patientNames = overlappingActivities.map(a => {
+                      const p = patients?.find(p => p.id === a.patientId);
+                      return p ? `${p.firstName} ${p.lastName}` : "Unknown";
+                    });
+                    const conflictList = overlappingActivities.map((a, i) =>
+                      `- ${a.title} (${patientNames[i]}) at ${new Date(a.startTime).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}`
+                    ).join("\n");
+
+                    const confirmed = window.confirm(
+                      `⚠️ Time Conflict Detected!\n\nThe following activities are already scheduled during this time:\n\n${conflictList}\n\nDo you want to schedule anyway?`
+                    );
+
+                    if (!confirmed) {
+                      return;
+                    }
+                  }
+
+                  // Check for DUPLICATE patient encounter (same patient, same time, same title)
+                  const selectedProcedureTypesForCheck = activityTypes?.filter(t => formActivityTypeIds.includes(t.id)) || [];
+                  const procedureTitleForCheck = formTitle || selectedProcedureTypesForCheck.map(t => t.name).join(" + ") || "Scheduled Activity";
+
+                  const duplicateEncounter = activities?.find(a => {
+                    if (editingActivityId && a.id === editingActivityId) return false;
+                    const actStart = new Date(a.startTime);
+                    return (
+                      a.patientId === patientId &&
+                      actStart.getTime() === startDateTime.getTime() &&
+                      a.title === procedureTitleForCheck
+                    );
+                  });
+
+                  if (duplicateEncounter) {
+                    const patient = patients?.find(p => p.id === patientId);
+                    const patientName = patient ? `${patient.firstName} ${patient.lastName}` : "this patient";
+                    alert(
+                      `🚫 DUPLICATE ENCOUNTER!\n\n${patientName} already has "${procedureTitleForCheck}" scheduled at this exact time.\n\nPlease choose a different time or procedure.`
+                    );
+                    return;
+                  }
+
+                  // Get procedure type names for the title
+                  const selectedProcedureTypes = activityTypes?.filter(t => formActivityTypeIds.includes(t.id)) || [];
+                  const procedureTypeNames = selectedProcedureTypes.map(t => t.name).join(" + ");
+                  const procedureTitle = formTitle || procedureTypeNames || "Scheduled Activity";
 
                   // Combine intervention with other details
                   let finalIntervention = formIntervention;
@@ -1403,9 +1665,9 @@ export default function Calendar() {
                     finalIntervention = `${formIntervention} - ${formOtherIntervention}`;
                   }
 
-                  createActivity.mutate({
+                  const activityData = {
                     patientId,
-                    activityTypeId: formActivityTypeId ? Number(formActivityTypeId) : (activityTypes?.[0]?.id || 1),
+                    activityTypeId: formActivityTypeIds[0] || (activityTypes?.[0]?.id || 1),
                     title: procedureTitle,
                     startTime: startDateTime,
                     endTime: endDateTime,
@@ -1419,10 +1681,16 @@ export default function Calendar() {
                     sedationistId,
                     pmdId,
                     intervention: finalIntervention || undefined,
-                    notes: formPmdService ? `PMD: ${formPmdService}${formNotes ? ` | ${formNotes}` : ""}` : formNotes || undefined,
+                    notes: formPmdService ? `Primary: ${formPmdService}${formNotes ? ` | ${formNotes}` : ""}` : formNotes || undefined,
                     description: formPmdService || undefined,
                     status: formStatus as any,
-                  });
+                  };
+
+                  if (editingActivityId) {
+                    updateActivity.mutate({ id: editingActivityId, ...activityData });
+                  } else {
+                    createActivity.mutate(activityData);
+                  }
                 }} className="space-y-4">
 
                   {/* Patient Selection Mode */}
@@ -1544,70 +1812,144 @@ export default function Calendar() {
                   )}
 
                   {/* Activity Title */}
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Activity Title *</label>
-                      <select
-                        value={formTitle}
-                        onChange={(e) => setFormTitle(e.target.value)}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md bg-white focus:ring-2 focus:ring-blue-500"
-                        required
-                      >
-                        <option value="">-- Select Title --</option>
-                        {ACTIVITY_TITLES.map(t => (
-                          <option key={t} value={t}>{t}</option>
-                        ))}
-                      </select>
-                    </div>
-                    {formTitle === "Other" && (
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Custom Title *</label>
-                        <input
-                          type="text"
-                          placeholder="Enter custom title..."
-                          className="w-full px-3 py-2 border border-blue-300 rounded-md bg-blue-50"
-                          onChange={(e) => setFormTitle(e.target.value || "Other")}
-                          required
-                        />
-                      </div>
-                    )}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Activity Title *</label>
+                    <CreatableSelect
+                      value={formTitle}
+                      onChange={(val) => {
+                        setFormTitle(val);
+
+                        // Auto-fill based on Activity Title
+                        if (val === "LP") {
+                          setFormIntervention("Lumbar Puncture");
+                          setFormCaseType("Procedure");
+                          setFormSedationRequired(true);
+                          setFormSedationType("Conscious Sedation");
+                        } else if (val === "BMA" || val === "BMBx") {
+                          setFormIntervention(val === "BMA" ? "Bone Marrow Aspiration" : "Bone Marrow Biopsy");
+                          setFormCaseType("Procedure");
+                          setFormSedationRequired(true);
+                          setFormSedationType("Conscious Sedation");
+                        } else if (val === "PICC") {
+                          setFormIntervention("PICC Line Placement");
+                          setFormCaseType("Procedure");
+                          setFormSedationRequired(true);
+                        } else if (val === "Central Line") {
+                          setFormIntervention("Central Line Placement");
+                          setFormCaseType("Procedure");
+                          setFormSedationRequired(true);
+                        } else if (val === "Port Access" || val === "Port Placement") {
+                          setFormIntervention(val);
+                          setFormCaseType("Procedure");
+                          setFormSedationRequired(val === "Port Placement");
+                        } else if (val === "IT Chemo") {
+                          setFormIntervention("Intrathecal Chemotherapy");
+                          setFormCaseType("Procedure");
+                          setFormSedationRequired(true);
+                          setFormPmdService("Oncology");
+                          setFormService("Oncology");
+                        } else if (val === "Sedated Procedure" || val === "IR Procedure") {
+                          setFormCaseType("Procedure");
+                          setFormSedationRequired(true);
+                          setFormSedationType("Conscious Sedation");
+                        } else if (val === "Direct Admit") {
+                          setFormCaseType("Direct Admit");
+                          setFormSedationRequired(false);
+                          setFormPriority("Urgent");
+                        } else if (val === "Consultation") {
+                          setFormCaseType("Consultation");
+                          setFormSedationRequired(false);
+                        } else if (val === "Follow-up") {
+                          setFormCaseType("Follow-up");
+                          setFormSedationRequired(false);
+                        }
+                      }}
+                      options={[...ACTIVITY_TITLES, ...customTitles].filter(t => t !== "Other").map(t => ({ value: t, label: t }))}
+                      placeholder="-- Select or type title --"
+                      className="w-full"
+                      onCreateOption={(val) => setCustomTitles(prev => [...prev, val])}
+                    />
                   </div>
 
-                  {/* PMD Service */}
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">PMD Service *</label>
-                      <select
-                        value={formPmdService}
-                        onChange={(e) => setFormPmdService(e.target.value)}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md bg-white focus:ring-2 focus:ring-blue-500"
-                        required
-                      >
-                        <option value="">-- Select PMD Service --</option>
-                        {PMD_SERVICES.map(s => (
-                          <option key={s} value={s}>{s}</option>
-                        ))}
-                      </select>
-                    </div>
-                    {formPmdService === "Other" && (
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Specify Service *</label>
-                        <input
-                          type="text"
-                          placeholder="Enter service..."
-                          className="w-full px-3 py-2 border border-blue-300 rounded-md bg-blue-50"
-                          onChange={(e) => setFormPmdService(e.target.value || "Other")}
-                          required
-                        />
-                      </div>
-                    )}
+                  {/* Primary Service */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Primary Service *</label>
+                    <select
+                      value={formPmdService}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setFormPmdService(val);
+
+                        // Auto-fill Service field based on Primary Service
+                        const mappedService = PRIMARY_TO_SERVICE[val];
+                        if (mappedService) {
+                          setFormService(mappedService);
+                        }
+
+                        // Auto-fill other fields based on Primary Service
+                        if (val === "Oncology" || val === "Hematology" || val === "Heme/Onc") {
+                          setFormTitle("LP");
+                          setFormIntervention("Lumbar Puncture");
+                          setFormSedationRequired(true);
+                          setFormSedationType("Conscious Sedation");
+                          setFormCaseType("Procedure");
+                        } else if (val === "GI") {
+                          setFormTitle("Sedated Procedure");
+                          setFormIntervention("EGD");
+                          setFormSedationRequired(true);
+                          setFormSedationType("Conscious Sedation");
+                          setFormCaseType("Procedure");
+                        } else if (val === "Radiology" || val === "Interventional Radiology") {
+                          setFormTitle("Sedated Procedure");
+                          setFormIntervention("Sedated MRI");
+                          setFormSedationRequired(true);
+                          setFormSedationType("Conscious Sedation");
+                          setFormCaseType("Procedure");
+                        } else if (val === "Peds Surgery" || val === "Peds HBS" || val === "General Surgery") {
+                          setFormTitle("Sedated Procedure");
+                          setFormSedationRequired(true);
+                          setFormSedationType("Conscious Sedation");
+                          setFormCaseType("Procedure");
+                        } else if (val === "Cardiology" || val === "Cardiac Surgery") {
+                          setFormTitle("Sedated Procedure");
+                          setFormIntervention("Sedated Echo");
+                          setFormSedationRequired(true);
+                          setFormCaseType("Procedure");
+                        } else if (val === "General Pediatrics" || val === "Hospitalist") {
+                          setFormCaseType("Consultation");
+                          setFormTitle("Consultation");
+                          setFormSedationRequired(false);
+                          setFormSedationType("None");
+                        } else if (val === "Pain Management") {
+                          setFormSedationRequired(true);
+                          setFormSedationType("Conscious Sedation");
+                          setFormCaseType("Procedure");
+                        }
+                      }}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md bg-white focus:ring-2 focus:ring-blue-500"
+                      required
+                    >
+                      <option value="">-- Select Primary Service --</option>
+                      {[...PRIMARY_SERVICES, ...customServices].map(s => (
+                        <option key={s} value={s}>{s}</option>
+                      ))}
+                    </select>
                   </div>
 
                   {/* Procedure MD (Doctor) */}
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Procedure MD (Doctor)</label>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Procedure MD (Doctor)
+                      <button
+                        type="button"
+                        onClick={() => window.open('/staff', '_blank')}
+                        className="ml-2 text-xs text-blue-600 hover:text-blue-800 hover:underline"
+                      >
+                        Manage Staff →
+                      </button>
+                    </label>
                     {!showNewProcedureMD ? (
-                      <div className="flex gap-2">
+                      <div className="flex gap-1">
                         <select
                           value={formPmdId}
                           onChange={(e) => {
@@ -1620,14 +1962,28 @@ export default function Calendar() {
                           }}
                           className="flex-1 px-3 py-2 border border-gray-300 rounded-md bg-white focus:ring-2 focus:ring-blue-500"
                         >
-                          <option value="">-- Select Doctor (Optional) --</option>
-                          {staff?.map(s => (
-                            <option key={s.id} value={s.id}>
-                              {s.name || `Staff #${s.id}`}
-                            </option>
-                          ))}
+                          <option value="">-- Select Procedure MD --</option>
+                          {physicians.length > 0 ? (
+                            physicians.map(s => (
+                              <option key={s.id} value={s.id}>
+                                {s.name || `Staff #${s.id}`} (PMD)
+                              </option>
+                            ))
+                          ) : (
+                            <option disabled>No certified procedure MDs available</option>
+                          )}
                           <option value="new">+ Add New Doctor</option>
                         </select>
+                        {formPmdId && (
+                          <button
+                            type="button"
+                            onClick={() => setFormPmdId("")}
+                            className="px-2 py-1 text-gray-500 hover:text-red-500 hover:bg-red-50 rounded"
+                            title="Clear selection"
+                          >
+                            ✕
+                          </button>
+                        )}
                       </div>
                     ) : (
                       <div className="flex gap-2">
@@ -1654,21 +2010,44 @@ export default function Calendar() {
                   <div className="grid grid-cols-3 gap-4">
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Service</label>
-                      <select
+                      <CreatableSelect
                         value={formService}
-                        onChange={(e) => setFormService(e.target.value)}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                      >
-                        {SERVICES.filter(s => s !== "All Services").map(s => (
-                          <option key={s} value={s}>{s}</option>
-                        ))}
-                      </select>
+                        onChange={setFormService}
+                        options={[...SERVICES.filter(s => s !== "All Services" && s !== "Other"), ...customServices].map(s => ({ value: s, label: s }))}
+                        placeholder="-- Select or type service --"
+                        className="w-full"
+                        onCreateOption={(val) => setCustomServices(prev => [...prev, val])}
+                      />
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Case Type</label>
                       <select
                         value={formCaseType}
-                        onChange={(e) => setFormCaseType(e.target.value)}
+                        onChange={(e) => {
+                          const caseType = e.target.value;
+                          setFormCaseType(caseType);
+
+                          // Auto-fill based on case type
+                          if (caseType === "Procedure") {
+                            setFormSedationRequired(true);
+                            setFormSedationType("Conscious Sedation");
+                          } else if (caseType === "Direct Admit") {
+                            setFormTitle("Direct Admit");
+                            setFormSedationRequired(false);
+                            setFormSedationType("None");
+                            setFormPriority("Urgent");
+                          } else if (caseType === "Consultation") {
+                            setFormTitle("Consultation");
+                            setFormSedationRequired(false);
+                            setFormSedationType("None");
+                            setFormPriority("Planned");
+                          } else if (caseType === "Follow-up") {
+                            setFormTitle("Follow-up");
+                            setFormSedationRequired(false);
+                            setFormSedationType("None");
+                            setFormPriority("Planned");
+                          }
+                        }}
                         className="w-full px-3 py-2 border border-gray-300 rounded-md"
                       >
                         {CASE_TYPES.filter(t => t !== "All Types").map(t => (
@@ -1692,36 +2071,172 @@ export default function Calendar() {
 
                   {/* Row 3: Procedure Type, Room, Status */}
                   <div className="grid grid-cols-3 gap-4">
-                    <div>
+                    <div className="relative">
                       <label className="block text-sm font-medium text-gray-700 mb-1">Procedure Type *</label>
-                      <select
-                        value={formActivityTypeId}
-                        onChange={(e) => setFormActivityTypeId(e.target.value ? Number(e.target.value) : "")}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md bg-white focus:ring-2 focus:ring-blue-500"
-                        required
+                      <button
+                        type="button"
+                        onClick={() => setShowProcedureDropdown(!showProcedureDropdown)}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md bg-white text-left flex justify-between items-center focus:ring-2 focus:ring-blue-500"
                       >
-                        <option value="">-- Select Procedure Type --</option>
-                        {activityTypes?.map(t => (
-                          <option key={t.id} value={t.id}>
-                            {t.name}
-                          </option>
-                        ))}
-                      </select>
+                        <span className={formActivityTypeIds.length === 0 ? "text-gray-400" : ""}>
+                          {formActivityTypeIds.length === 0
+                            ? "-- Select Procedure Type(s) --"
+                            : activityTypes?.filter(t => formActivityTypeIds.includes(t.id)).map(t => t.name).join(", ")
+                          }
+                        </span>
+                        <span className="text-gray-400">{showProcedureDropdown ? "▲" : "▼"}</span>
+                      </button>
+                      {showProcedureDropdown && (
+                        <div className="absolute z-50 w-full mt-1 bg-white border border-gray-300 rounded-md shadow-lg">
+                          <div className="border-b p-2">
+                            <button
+                              type="button"
+                              onClick={() => setShowProcedureDropdown(false)}
+                              className="w-full py-1 bg-blue-500 text-white rounded hover:bg-blue-600"
+                            >
+                              Done
+                            </button>
+                          </div>
+                          <div className="max-h-64 overflow-y-auto">
+                          {Object.entries(PROCEDURE_CATEGORIES).map(([category, procedureNames]) => {
+                            // Filter activity types that belong to this category
+                            const categoryTypes = activityTypes?.filter(t => procedureNames.includes(t.name)) || [];
+                            if (categoryTypes.length === 0) return null;
+
+                            return (
+                              <div key={category}>
+                                <div className="px-3 py-1 bg-gray-100 text-xs font-bold text-gray-600 uppercase tracking-wide border-b sticky top-0">
+                                  {category}
+                                </div>
+                                {categoryTypes.map(t => (
+                                  <label
+                                    key={t.id}
+                                    className="flex items-center px-3 py-2 hover:bg-gray-100 cursor-pointer pl-5"
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={formActivityTypeIds.includes(t.id)}
+                                      onChange={(e) => {
+                                        const typeId = t.id;
+                                        let newIds: number[];
+
+                                        if (e.target.checked) {
+                                          newIds = [...formActivityTypeIds, typeId];
+                                        } else {
+                                          newIds = formActivityTypeIds.filter(id => id !== typeId);
+                                        }
+                                        setFormActivityTypeIds(newIds);
+
+                                        // Update title to show all selected
+                                        const allSelected = activityTypes?.filter(at => newIds.includes(at.id)).map(at => at.name) || [];
+                                        setFormTitle(allSelected.join(" + ") || "LP");
+
+                                        // Auto-fill based on newly checked type
+                                        if (e.target.checked) {
+                                          const typeName = t.name;
+
+                                          if (typeName === "LP") {
+                                            setFormIntervention("Lumbar Puncture");
+                                            setFormCaseType("Procedure");
+                                            setFormSedationRequired(true);
+                                            setFormPmdService("Oncology");
+                                            setFormService("Oncology");
+                                          } else if (typeName === "BMA" || typeName === "BMBx") {
+                                            setFormIntervention(typeName === "BMA" ? "Bone Marrow Aspiration" : "Bone Marrow Biopsy");
+                                            setFormCaseType("Procedure");
+                                            setFormSedationRequired(true);
+                                            setFormPmdService("Oncology");
+                                            setFormService("Oncology");
+                                          } else if (typeName === "IT Chemo") {
+                                            setFormIntervention("Intrathecal Chemotherapy");
+                                            setFormCaseType("Procedure");
+                                            setFormSedationRequired(true);
+                                            setFormPmdService("Oncology");
+                                            setFormService("Oncology");
+                                          } else if (typeName === "PICC" || typeName === "Central Line") {
+                                            setFormIntervention(typeName === "PICC" ? "PICC Line Placement" : "Central Line Placement");
+                                            setFormCaseType("Procedure");
+                                            setFormSedationRequired(true);
+                                          } else if (typeName === "Sedated MRI" || typeName === "Sedated CT" || typeName === "IR Procedure") {
+                                            setFormIntervention(typeName);
+                                            setFormCaseType("Procedure");
+                                            setFormSedationRequired(true);
+                                            setFormService("Radiology");
+                                          } else if (typeName === "Consultation" || typeName === "Follow-up") {
+                                            setFormCaseType(typeName);
+                                            setFormSedationRequired(false);
+                                          } else if (typeName === "Direct Admit") {
+                                            setFormCaseType("Direct Admit");
+                                            setFormSedationRequired(false);
+                                            setFormPriority("Urgent");
+                                          }
+                                        }
+                                      }}
+                                      className="mr-2 h-4 w-4 text-blue-600 rounded"
+                                    />
+                                    {t.name}
+                                  </label>
+                                ))}
+                              </div>
+                            );
+                          })}
+                          {/* Show uncategorized types */}
+                          {activityTypes?.filter(t => !Object.values(PROCEDURE_CATEGORIES).flat().includes(t.name)).map(t => (
+                            <label
+                              key={t.id}
+                              className="flex items-center px-3 py-2 hover:bg-gray-100 cursor-pointer"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={formActivityTypeIds.includes(t.id)}
+                                onChange={(e) => {
+                                  const typeId = t.id;
+                                  let newIds: number[];
+
+                                  if (e.target.checked) {
+                                    newIds = [...formActivityTypeIds, typeId];
+                                  } else {
+                                    newIds = formActivityTypeIds.filter(id => id !== typeId);
+                                  }
+                                  setFormActivityTypeIds(newIds);
+                                  const allSelected = activityTypes?.filter(at => newIds.includes(at.id)).map(at => at.name) || [];
+                                  setFormTitle(allSelected.join(" + ") || "LP");
+                                }}
+                                className="mr-2 h-4 w-4 text-blue-600 rounded"
+                              />
+                              {t.name}
+                            </label>
+                          ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Room</label>
-                      <select
-                        value={formRoomId}
-                        onChange={(e) => setFormRoomId(e.target.value ? Number(e.target.value) : "")}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                      >
-                        <option value="">No room assigned</option>
-                        {rooms?.filter(r => r.isActive === 1).map(r => (
-                          <option key={r.id} value={r.id}>
-                            {r.name} ({r.type})
-                          </option>
-                        ))}
-                      </select>
+                      <div className="flex gap-1">
+                        <select
+                          value={formRoomId}
+                          onChange={(e) => setFormRoomId(e.target.value ? Number(e.target.value) : "")}
+                          className="flex-1 px-3 py-2 border border-gray-300 rounded-md"
+                        >
+                          <option value="">No room assigned</option>
+                          {rooms?.filter(r => r.isActive === 1).map(r => (
+                            <option key={r.id} value={r.id}>
+                              {r.name} ({r.type})
+                            </option>
+                          ))}
+                        </select>
+                        {formRoomId && (
+                          <button
+                            type="button"
+                            onClick={() => setFormRoomId("")}
+                            className="px-2 py-1 text-gray-500 hover:text-red-500 hover:bg-red-50 rounded"
+                            title="Clear room"
+                          >
+                            ✕
+                          </button>
+                        )}
+                      </div>
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
@@ -1745,33 +2260,58 @@ export default function Calendar() {
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Intervention Type</label>
-                      <select
+                      <CreatableSelect
                         value={formIntervention}
-                        onChange={(e) => {
-                          setFormIntervention(e.target.value);
-                          if (e.target.value !== "Other") {
-                            setFormOtherIntervention("");
+                        onChange={(val) => {
+                          setFormIntervention(val);
+                          setFormOtherIntervention("");
+
+                          // Auto-fill based on Intervention
+                          if (val === "Lumbar Puncture") {
+                            setFormTitle("LP");
+                            setFormSedationRequired(true);
+                          } else if (val === "Bone Marrow Aspiration") {
+                            setFormTitle("BMA");
+                            setFormSedationRequired(true);
+                          } else if (val === "Bone Marrow Biopsy") {
+                            setFormTitle("BMBx");
+                            setFormSedationRequired(true);
+                          } else if (val === "PICC Line Placement") {
+                            setFormTitle("PICC");
+                            setFormSedationRequired(true);
+                          } else if (val === "Central Line Placement") {
+                            setFormTitle("Central Line");
+                            setFormSedationRequired(true);
+                          } else if (val === "Intrathecal Chemotherapy") {
+                            setFormTitle("IT Chemo");
+                            setFormSedationRequired(true);
+                            setFormPmdService("Oncology");
+                            setFormService("Oncology");
+                          } else if (val.includes("Sedated MRI") || val.includes("Sedated CT")) {
+                            setFormService("Radiology");
+                            setFormSedationRequired(true);
+                          } else if (val === "EGD" || val === "Colonoscopy") {
+                            setFormService("GI");
+                            setFormSedationRequired(true);
+                          } else if (val === "Bronchoscopy") {
+                            setFormService("Pulmonary");
+                            setFormSedationRequired(true);
                           }
                         }}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md bg-white"
-                      >
-                        <option value="">-- Select Intervention --</option>
-                        {INTERVENTIONS.map(i => (
-                          <option key={i} value={i}>{i}</option>
-                        ))}
-                      </select>
+                        options={[...INTERVENTIONS, ...customInterventions].filter(i => i !== "Other").map(i => ({ value: i, label: i }))}
+                        placeholder="-- Select or type intervention --"
+                        className="w-full"
+                        onCreateOption={(val) => setCustomInterventions(prev => [...prev, val])}
+                      />
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
-                        {formIntervention === "Other" ? "Specify Intervention *" : "Additional Details"}
-                      </label>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Additional Details</label>
                       <input
                         type="text"
                         value={formOtherIntervention}
                         onChange={(e) => setFormOtherIntervention(e.target.value)}
-                        placeholder={formIntervention === "Other" ? "Describe intervention..." : "Optional details..."}
-                        className={`w-full px-3 py-2 border rounded-md ${formIntervention === "Other" ? "border-blue-300 bg-blue-50" : "border-gray-300"}`}
-                        required={formIntervention === "Other"}
+                        placeholder="Optional details..."
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md"
                       />
                     </div>
                   </div>
@@ -1793,7 +2333,19 @@ export default function Calendar() {
                       <input
                         type="time"
                         value={formStartTime}
-                        onChange={(e) => setFormStartTime(e.target.value)}
+                        onChange={(e) => {
+                          const startTime = e.target.value;
+                          setFormStartTime(startTime);
+                          // Auto-set end time to 30 minutes later
+                          if (startTime) {
+                            const [hours, minutes] = startTime.split(':').map(Number);
+                            const endDate = new Date();
+                            endDate.setHours(hours, minutes + 30, 0, 0);
+                            const endHours = endDate.getHours().toString().padStart(2, '0');
+                            const endMinutes = endDate.getMinutes().toString().padStart(2, '0');
+                            setFormEndTime(`${endHours}:${endMinutes}`);
+                          }
+                        }}
                         className="w-full px-3 py-2 border border-gray-300 rounded-md"
                         required
                       />
@@ -1855,38 +2407,27 @@ export default function Calendar() {
                   {/* Sedation Section */}
                   <div className="border-2 border-blue-200 rounded-lg p-4 bg-blue-50/50">
                     <div className="flex items-center gap-3 mb-3">
-                      <label className="flex items-center gap-2 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={formSedationRequired}
-                          onChange={(e) => {
-                            setFormSedationRequired(e.target.checked);
-                            if (!e.target.checked) {
-                              setFormSedationType("None");
-                              setFormSedationProvider("None");
-                              setFormSedationistId("");
-                            }
-                          }}
-                          className="w-5 h-5 rounded border-blue-400 text-blue-600 focus:ring-blue-500"
-                        />
-                        <span className="font-bold text-blue-800 text-lg">Sedation Required?</span>
-                      </label>
+                      <label className="block text-sm font-medium text-gray-700 mr-2">Sedation</label>
+                      <select
+                        value={formSedationRequired ? "Yes" : "No"}
+                        onChange={(e) => {
+                          const isYes = e.target.value === "Yes";
+                          setFormSedationRequired(isYes);
+                          if (!isYes) {
+                            setFormSedationType("None");
+                            setFormSedationProvider("None");
+                            setFormSedationistId("");
+                          }
+                        }}
+                        className="px-3 py-2 border border-gray-300 rounded-md bg-white font-bold text-blue-800"
+                      >
+                        <option value="Yes">Yes</option>
+                        <option value="No">No</option>
+                      </select>
                     </div>
 
                     {formSedationRequired && (
-                      <div className="grid grid-cols-3 gap-4 pl-6 border-l-2 border-blue-200">
-                        <div>
-                          <label className="block text-sm font-medium text-gray-700 mb-1">Sedation Type</label>
-                          <select
-                            value={formSedationType}
-                            onChange={(e) => setFormSedationType(e.target.value)}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                          >
-                            {SEDATION_TYPES.filter(t => t !== "All Sedation").map(t => (
-                              <option key={t} value={t}>{t}</option>
-                            ))}
-                          </select>
-                        </div>
+                      <div className="grid grid-cols-2 gap-4 pl-6 border-l-2 border-blue-200">
                         <div>
                           <label className="block text-sm font-medium text-gray-700 mb-1">Provider Type</label>
                           <select
@@ -1901,28 +2442,53 @@ export default function Calendar() {
                           </select>
                         </div>
                         <div>
-                          <label className="block text-sm font-medium text-gray-700 mb-1">Sedation MD</label>
-                          {!showNewSedationMD ? (
-                            <select
-                              value={formSedationistId}
-                              onChange={(e) => {
-                                if (e.target.value === "new") {
-                                  setShowNewSedationMD(true);
-                                  setFormSedationistId("");
-                                } else {
-                                  setFormSedationistId(e.target.value ? Number(e.target.value) : "");
-                                }
-                              }}
-                              className="w-full px-3 py-2 border border-gray-300 rounded-md bg-white"
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Sedation MD
+                            <button
+                              type="button"
+                              onClick={() => window.open('/staff', '_blank')}
+                              className="ml-2 text-xs text-blue-600 hover:text-blue-800 hover:underline"
                             >
-                              <option value="">-- Select Sedation MD --</option>
-                              {staff?.map(s => (
-                                <option key={s.id} value={s.id}>
-                                  {s.name || `Staff #${s.id}`}
-                                </option>
-                              ))}
-                              <option value="new">+ Add New Doctor</option>
-                            </select>
+                              Manage →
+                            </button>
+                          </label>
+                          {!showNewSedationMD ? (
+                            <div className="flex gap-1">
+                              <select
+                                value={formSedationistId}
+                                onChange={(e) => {
+                                  if (e.target.value === "new") {
+                                    setShowNewSedationMD(true);
+                                    setFormSedationistId("");
+                                  } else {
+                                    setFormSedationistId(e.target.value ? Number(e.target.value) : "");
+                                  }
+                                }}
+                                className="flex-1 px-3 py-2 border border-gray-300 rounded-md bg-white"
+                              >
+                                <option value="">-- Select Sedation MD --</option>
+                                {sedationists.length > 0 ? (
+                                  sedationists.map(s => (
+                                    <option key={s.id} value={s.id}>
+                                      {s.name || `Staff #${s.id}`} ({s.specializations?.join(", ")})
+                                    </option>
+                                  ))
+                                ) : (
+                                  <option disabled>No certified sedationists available</option>
+                                )}
+                                <option value="new">+ Add New Sedationist</option>
+                              </select>
+                              {formSedationistId && (
+                                <button
+                                  type="button"
+                                  onClick={() => setFormSedationistId("")}
+                                  className="px-2 py-1 text-gray-500 hover:text-red-500 hover:bg-red-50 rounded"
+                                  title="Clear selection"
+                                >
+                                  ✕
+                                </button>
+                              )}
+                            </div>
                           ) : (
                             <div className="flex gap-2">
                               <input

@@ -11,6 +11,8 @@ import Schedule from "./pages/Schedule";
 import Calendar from "./pages/Calendar";
 import PatientTimeline from "./pages/PatientTimeline";
 import AuditLog from "./pages/AuditLog";
+import Staff from "./pages/Staff";
+import Rooms from "./pages/Rooms";
 
 function Router() {
   // make sure to consider if you need authentication for certain routes
@@ -23,6 +25,8 @@ function Router() {
       <Route path={"/calendar"} component={Calendar} />
       <Route path={"/timeline"} component={PatientTimeline} />
       <Route path={"/audit"} component={AuditLog} />
+      <Route path={"/staff"} component={Staff} />
+      <Route path={"/rooms"} component={Rooms} />
       <Route path={"/404"} component={NotFound} />
       {/* Final fallback route */}
       <Route component={NotFound} />

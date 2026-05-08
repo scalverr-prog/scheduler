@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { protectedProcedure, router } from "../_core/trpc";
-import { getPatients, getPatientById, createPatient, updatePatient, getPatientByMRN } from "../db";
+import { getPatients, getPatientById, createPatient, updatePatient, deletePatient, getPatientByMRN } from "../db";
 import { createAuditLog } from "../db";
 
 const patientSchema = z.object({
@@ -86,5 +86,31 @@ export const patientsRouter = router({
       });
 
       return result;
+    }),
+
+  delete: protectedProcedure
+    .input(z.object({ id: z.number() }))
+    .mutation(async ({ input, ctx }) => {
+      if (ctx.user.role !== "admin" && ctx.user.role !== "staff") {
+        throw new Error("Unauthorized: Only admin or staff can delete patients");
+      }
+
+      const patient = await getPatientById(input.id);
+      if (!patient) {
+        throw new Error("Patient not found");
+      }
+
+      await deletePatient(input.id);
+
+      await createAuditLog({
+        action: "DELETE",
+        entityType: "Patient",
+        entityId: input.id,
+        userId: ctx.user.id,
+        previousValues: JSON.stringify(patient),
+        createdAt: new Date(),
+      });
+
+      return { success: true };
     }),
 });
