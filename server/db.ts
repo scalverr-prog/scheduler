@@ -191,7 +191,40 @@ export async function getStaffSpecialization(userId: number) {
 export async function createActivity(data: InsertActivity) {
   const db = await getDb();
   if (!db) throw new Error("Database not available");
-  return db.insert(activities).values(data);
+
+  // Clean up the data - remove undefined, null, and empty string values for optional fields
+  // Required fields: patientId, activityTypeId, title, startTime, endTime, createdBy
+  const requiredFields = ['patientId', 'activityTypeId', 'title', 'startTime', 'endTime', 'createdBy'];
+  const cleanData: Record<string, any> = {};
+
+  for (const [key, value] of Object.entries(data)) {
+    // Always include required fields
+    if (requiredFields.includes(key)) {
+      cleanData[key] = value;
+      continue;
+    }
+    // Skip null, undefined, and empty strings for optional fields
+    if (value === undefined || value === null || value === '') {
+      continue;
+    }
+    cleanData[key] = value;
+  }
+
+  console.log("Creating activity with clean data:", JSON.stringify(cleanData, null, 2));
+
+  try {
+    return await db.insert(activities).values(cleanData as InsertActivity);
+  } catch (error: any) {
+    // Log full error details for debugging
+    console.error("=== DATABASE INSERT ERROR ===");
+    console.error("Error message:", error.message);
+    console.error("Error code:", error.code);
+    console.error("Error detail:", error.detail);
+    console.error("Error constraint:", error.constraint);
+    console.error("Clean data:", JSON.stringify(cleanData, null, 2));
+    // Re-throw original error to preserve stack trace
+    throw error;
+  }
 }
 
 export async function updateActivity(id: number, data: Partial<InsertActivity>) {

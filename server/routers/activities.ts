@@ -7,33 +7,37 @@ const activitySchema = z.object({
   patientId: z.number(),
   activityTypeId: z.number(),
   title: z.string().min(1, "Title is required"),
-  description: z.string().optional(),
+  description: z.string().nullish(),
   startTime: z.date(),
   endTime: z.date(),
-  roomId: z.number().optional(),
-  assignedStaffIds: z.string().optional(),
-  pmdId: z.number().optional(),
-  sedationistId: z.number().optional(),
-  intervention: z.string().optional(),
+  roomId: z.number().nullish(),
+  assignedStaffIds: z.string().nullish(),
+  pmdId: z.number().nullish(),
+  sedationistId: z.number().nullish(),
+  intervention: z.string().nullish(),
   // New fields for procedure/admit scheduling
   service: z.enum([
     "GI", "Pulmonary", "Cardiology", "Radiology", "Neurology",
     "Orthopedics", "General Surgery", "Vascular", "Urology",
     "ENT", "Oncology", "Pain Management", "Other"
-  ]).optional(),
-  caseType: z.enum(["Procedure", "Direct Admit", "Consultation", "Follow-up"]).optional(),
-  priority: z.enum(["Planned", "Routine", "Urgent", "Emergent", "Add-On"]).optional(),
-  sedationRequired: z.number().optional(),
-  sedationType: z.enum(["None", "Conscious Sedation", "Moderate Sedation", "MAC", "General Anesthesia"]).optional(),
-  sedationProvider: z.enum(["None", "Intensivist", "Anesthesia", "Proceduralist"]).optional(),
-  preOpComplete: z.number().optional(),
-  consentSigned: z.number().optional(),
-  npoStatus: z.string().optional(),
-  status: z.enum(["Pending", "Requested", "Scheduled", "Confirmed", "In Progress", "Completed", "Cancelled"]).optional(),
-  notes: z.string().optional(),
-  isRecurring: z.number().optional(),
-  recurringPattern: z.string().optional(),
-  recurringEndDate: z.date().optional(),
+  ]).nullish(),
+  caseType: z.enum(["Procedure", "Direct Admit", "Consultation", "Follow-up"]).nullish(),
+  priority: z.enum(["Planned", "Routine", "Urgent", "Emergent", "Add-On"]).nullish(),
+  sedationRequired: z.number().nullish(),
+  sedationType: z.enum(["None", "Conscious Sedation", "Moderate Sedation", "MAC", "General Anesthesia"]).nullish(),
+  sedationProvider: z.enum(["None", "Intensivist", "Anesthesia", "Proceduralist"]).nullish(),
+  preOpComplete: z.number().nullish(),
+  consentSigned: z.number().nullish(),
+  npoStatus: z.string().nullish(),
+  status: z.enum(["Pending", "Requested", "Scheduled", "Confirmed", "In Progress", "Completed", "Cancelled"]).nullish(),
+  notes: z.string().nullish(),
+  isRecurring: z.number().nullish(),
+  recurringPattern: z.string().nullish(),
+  recurringEndDate: z.date().nullish(),
+  createdBy: z.number().nullish(),
+  createdByName: z.string().nullish(),
+  updatedBy: z.number().nullish(),
+  updatedByName: z.string().nullish(),
 });
 
 // Conflict detection helper
@@ -115,9 +119,9 @@ export const activitiesRouter = router({
         patientId: z.number(),
         startTime: z.date(),
         endTime: z.date(),
-        roomId: z.number().optional(),
-        staffIds: z.string().optional(),
-        excludeActivityId: z.number().optional(),
+        roomId: z.number().nullish(),
+        staffIds: z.string().nullish(),
+        excludeActivityId: z.number().nullish(),
       })
     )
     .query(async ({ input }) => {
@@ -143,23 +147,64 @@ export const activitiesRouter = router({
         throw new Error(`Scheduling conflict detected: ${conflicts.map((c) => c.message).join(", ")}`);
       }
 
+      // Clean up null/undefined values for optional fields
       const activityData = {
         ...input,
+        roomId: input.roomId || null,
+        pmdId: input.pmdId || null,
+        sedationistId: input.sedationistId || null,
+        intervention: input.intervention || null,
+        description: input.description || null,
+        notes: input.notes || null,
+        assignedStaffIds: input.assignedStaffIds || null,
+        npoStatus: input.npoStatus || null,
+        recurringPattern: input.recurringPattern || null,
+        recurringEndDate: input.recurringEndDate || null,
         createdBy: ctx.user.id,
         updatedBy: ctx.user.id,
       };
 
-      await createActivity(activityData);
+      try {
+        await createActivity(activityData);
+      } catch (error: any) {
+        console.error("=== ACTIVITY CREATE ERROR ===");
+        console.error("Error:", error.message || error);
+        console.error("Code:", error.code);
+        console.error("Detail:", error.detail);
+
+        // Extract useful error info
+        let errorMsg = "Failed to create activity";
+        if (error.code === '23503') {
+          errorMsg = "Foreign key error - patient or activity type doesn't exist";
+        } else if (error.code === '23505') {
+          errorMsg = "Duplicate entry - activity already exists";
+        } else if (error.code === '22P02') {
+          errorMsg = "Invalid data format";
+        } else if (error.detail) {
+          errorMsg = error.detail;
+        } else if (error.message) {
+          // Try to extract just the error part, not the full query
+          const match = error.message.match(/error: (.+)/i);
+          errorMsg = match ? match[1] : error.message.substring(0, 200);
+        }
+
+        throw new Error(errorMsg);
+      }
 
       // Log the action (we'll log with a placeholder ID since insertId isn't directly available)
-      await createAuditLog({
-        action: "CREATE",
-        entityType: "Activity",
-        entityId: 0, // Will be updated by database
-        userId: ctx.user.id,
-        newValues: JSON.stringify(input),
-        createdAt: new Date(),
-      });
+      try {
+        await createAuditLog({
+          action: "CREATE",
+          entityType: "Activity",
+          entityId: 0, // Will be updated by database
+          userId: ctx.user.id,
+          newValues: JSON.stringify(input),
+          createdAt: new Date(),
+        });
+      } catch (auditError) {
+        console.error("Failed to create audit log:", auditError);
+        // Don't fail the whole operation for audit log failure
+      }
 
       return { success: true };
     }),

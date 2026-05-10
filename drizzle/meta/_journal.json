@@ -1,47 +1,33 @@
 {
   "version": "7",
-  "dialect": "mysql",
+  "dialect": "postgresql",
   "entries": [
     {
       "idx": 0,
-      "version": "5",
-      "when": 1778034144259,
-      "tag": "0000_great_medusa",
+      "version": "7",
+      "when": 1778093919323,
+      "tag": "0000_lean_alice",
       "breakpoints": true
     },
     {
       "idx": 1,
-      "version": "5",
-      "when": 1778034279486,
-      "tag": "0001_stiff_captain_cross",
+      "version": "7",
+      "when": 1778167321488,
+      "tag": "0001_handy_deathbird",
       "breakpoints": true
     },
     {
       "idx": 2,
-      "version": "5",
-      "when": 1778035684775,
-      "tag": "0002_chief_adam_destine",
+      "version": "7",
+      "when": 1778254387428,
+      "tag": "0002_brown_zarek",
       "breakpoints": true
     },
     {
       "idx": 3,
-      "version": "5",
-      "when": 1778046770558,
-      "tag": "0003_burly_ulik",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "5",
-      "when": 1778067283212,
-      "tag": "0004_sad_swordsman",
-      "breakpoints": true
-    },
-    {
-      "idx": 5,
-      "version": "5",
-      "when": 1778067390700,
-      "tag": "0005_wonderful_ser_duncan",
+      "version": "7",
+      "when": 1778340800000,
+      "tag": "0003_add_ir_room_type",
       "breakpoints": true
     }
   ]

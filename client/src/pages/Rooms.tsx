@@ -57,6 +57,7 @@ export default function Rooms() {
       case "OR": return "🏥";
       case "Procedure Room": return "🩺";
       case "Imaging": return "📷";
+      case "Interventional Radiology": return "🎯";
       case "ICU": return "🚨";
       case "Ward": return "🛏️";
       default: return "🏢";
@@ -68,6 +69,7 @@ export default function Rooms() {
       case "OR": return "bg-red-100 text-red-800";
       case "Procedure Room": return "bg-blue-100 text-blue-800";
       case "Imaging": return "bg-purple-100 text-purple-800";
+      case "Interventional Radiology": return "bg-indigo-100 text-indigo-800";
       case "ICU": return "bg-orange-100 text-orange-800";
       case "Ward": return "bg-green-100 text-green-800";
       default: return "bg-gray-100 text-gray-800";
@@ -208,6 +210,7 @@ export default function Rooms() {
                 <option value="OR">Operating Room (OR)</option>
                 <option value="Procedure Room">Procedure Room</option>
                 <option value="Imaging">Imaging</option>
+                <option value="Interventional Radiology">Interventional Radiology (IR)</option>
                 <option value="Consultation">Consultation</option>
                 <option value="Ward">Ward</option>
                 <option value="ICU">ICU</option>

@@ -5,7 +5,7 @@ export const userRoleEnum = pgEnum("user_role", ["user", "admin", "staff"]);
 export const genderEnum = pgEnum("gender", ["M", "F", "Other", "Prefer not to say"]);
 export const admissionStatusEnum = pgEnum("admission_status", ["Inpatient", "Direct Admit", "Subacute Facility"]);
 export const patientStatusEnum = pgEnum("patient_status", ["Active", "Inactive", "Discharged", "Transferred"]);
-export const roomTypeEnum = pgEnum("room_type", ["OR", "Procedure Room", "Imaging", "Consultation", "Ward", "ICU", "Other"]);
+export const roomTypeEnum = pgEnum("room_type", ["OR", "Procedure Room", "Imaging", "Interventional Radiology", "Consultation", "Ward", "ICU", "Other"]);
 export const serviceEnum = pgEnum("service", [
   "GI", "Pulmonary", "Cardiology", "Radiology", "Neurology",
   "Orthopedics", "General Surgery", "Vascular", "Urology",
@@ -120,8 +120,10 @@ export const activities = pgTable("activities", {
   recurringPattern: varchar("recurringPattern", { length: 50 }),
   recurringEndDate: timestamp("recurringEndDate"),
   createdBy: integer("createdBy").notNull(),
+  createdByName: varchar("createdByName", { length: 100 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedBy: integer("updatedBy"),
+  updatedByName: varchar("updatedByName", { length: 100 }),
   updatedAt: timestamp("updatedAt").defaultNow().notNull(),
 });
 

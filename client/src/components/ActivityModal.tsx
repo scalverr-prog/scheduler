@@ -145,7 +145,7 @@ export default function ActivityModal({ open, onOpenChange, activity, onSuccess 
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{activity ? "Edit Activity" : "New Activity"}</DialogTitle>
+          <DialogTitle>{activity ? "Edit Encounter" : "New Encounter"}</DialogTitle>
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-4">

@@ -1,15 +1,17 @@
-import { useAuth } from "@/_core/hooks/useAuth";
+import { useUser } from "@/context/UserContext";
 import { Button } from "@/components/ui/button";
-import { LogOut, Menu } from "lucide-react";
+import { LogOut, Menu, User } from "lucide-react";
 import { useState } from "react";
 import { Link, useLocation } from "wouter";
+import NotificationPanel from "./NotificationPanel";
+import GlobalMic from "./GlobalMic";
 
 interface SchedulerLayoutProps {
   children: React.ReactNode;
 }
 
 export default function SchedulerLayout({ children }: SchedulerLayoutProps) {
-  const { user, logout } = useAuth();
+  const { currentUser, logout } = useUser();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [location] = useLocation();
 
@@ -18,7 +20,7 @@ export default function SchedulerLayout({ children }: SchedulerLayoutProps) {
     { href: "/calendar", label: "Calendar", icon: "🗓️" },
     { href: "/schedule", label: "Schedule", icon: "📅" },
     { href: "/patients", label: "Patients", icon: "👥" },
-    ...(user?.role === "admin" ? [{ href: "/audit", label: "Audit Log", icon: "📋" }] : []),
+    { href: "/audit", label: "Audit Log", icon: "📋" },
   ];
 
   const isActive = (href: string) => location === href;
@@ -29,6 +31,11 @@ export default function SchedulerLayout({ children }: SchedulerLayoutProps) {
 
   return (
     <div className="flex h-screen bg-background">
+      {/* Fixed Mic - Always Visible */}
+      <div className="fixed top-3 left-1/2 -translate-x-1/2 z-[100]">
+        <GlobalMic />
+      </div>
+
       {/* Mobile overlay */}
       {sidebarOpen && (
         <div
@@ -86,14 +93,40 @@ export default function SchedulerLayout({ children }: SchedulerLayoutProps) {
       {/* Main Content */}
       <main className="flex-1 flex flex-col overflow-hidden">
         {/* Header */}
-        <header className="border-b border-border bg-card px-4 py-3 shadow-sm flex items-center gap-3">
-          <button
-            onClick={() => setSidebarOpen(!sidebarOpen)}
-            className="p-2 hover:bg-muted rounded-lg transition-colors md:hidden"
-          >
-            <Menu size={24} />
-          </button>
-          <h2 className="text-lg md:text-2xl font-bold text-primary">Patient Scheduler</h2>
+        <header className="border-b border-border bg-card px-4 py-3 shadow-sm flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setSidebarOpen(!sidebarOpen)}
+              className="p-2 hover:bg-muted rounded-lg transition-colors md:hidden"
+            >
+              <Menu size={24} />
+            </button>
+            <h2 className="text-lg md:text-2xl font-bold text-primary">Patient Scheduler</h2>
+          </div>
+
+          {/* Current User Info */}
+          {currentUser && (
+            <div className="flex items-center gap-2">
+              {/* Notifications */}
+              <NotificationPanel />
+
+              <div className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-blue-50 rounded-lg">
+                <User size={16} className="text-blue-600" />
+                <div className="text-sm">
+                  <span className="font-medium text-blue-900">{currentUser.name}</span>
+                  <span className="text-blue-600 ml-2">{currentUser.serviceLine}</span>
+                </div>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => logout()}
+                className="text-gray-500 hover:text-red-600"
+              >
+                <LogOut size={18} />
+              </Button>
+            </div>
+          )}
         </header>
 
         {/* Content Area */}

@@ -3,9 +3,12 @@ import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { CreatableSelect } from "@/components/ui/creatable-select";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useLocation, useSearch } from "wouter";
 import { ChevronLeft, ChevronRight, X, Plus, AlertCircle, Syringe, Stethoscope, UserPlus, Search } from "lucide-react";
+import { useUser } from "@/context/UserContext";
+import { useNotifications } from "@/context/NotificationContext";
+import { VOICE_COMMAND_EVENT, VoiceCommandDetail, getPendingFormData } from "@/components/GlobalMic";
 
 type ViewType = "day" | "week" | "month";
 
@@ -53,7 +56,78 @@ const getProcedureCategory = (name: string): string => {
   return "Other";
 };
 
+// Map procedure types to Primary Service and Case Type
+const PROCEDURE_DEFAULTS: Record<string, { primaryService: string; caseType: string }> = {
+  // Oncology procedures
+  "LP": { primaryService: "Oncology", caseType: "Procedure" },
+  "BMA": { primaryService: "Oncology", caseType: "Procedure" },
+  "BMBx": { primaryService: "Oncology", caseType: "Procedure" },
+  "IT Chemo": { primaryService: "Oncology", caseType: "Procedure" },
+  // Vascular access - often oncology but can vary
+  "PICC": { primaryService: "Oncology", caseType: "Procedure" },
+  "Central Line": { primaryService: "Oncology", caseType: "Procedure" },
+  "Port Access": { primaryService: "Oncology", caseType: "Procedure" },
+  "Port Placement": { primaryService: "Oncology", caseType: "Procedure" },
+  // GI procedures
+  "EGD": { primaryService: "GI", caseType: "Procedure" },
+  "Colonoscopy": { primaryService: "GI", caseType: "Procedure" },
+  "Paracentesis": { primaryService: "GI", caseType: "Procedure" },
+  // Pulmonary
+  "Bronchoscopy": { primaryService: "Pulmonology", caseType: "Procedure" },
+  "Thoracentesis": { primaryService: "Pulmonology", caseType: "Procedure" },
+  // Imaging/Sedation
+  "Sedated MRI": { primaryService: "Radiology", caseType: "Procedure" },
+  "Sedated CT": { primaryService: "Radiology", caseType: "Procedure" },
+  "Sedated Echo": { primaryService: "Cardiology", caseType: "Procedure" },
+  "Sedated Procedure": { primaryService: "Oncology", caseType: "Procedure" },
+  // Interventional
+  "IR Procedure": { primaryService: "Interventional Radiology", caseType: "Procedure" },
+  "Biopsy": { primaryService: "Oncology", caseType: "Procedure" },
+  "Drain Placement": { primaryService: "Interventional Radiology", caseType: "Procedure" },
+  "Drain Removal": { primaryService: "Interventional Radiology", caseType: "Procedure" },
+  "Chest Tube Placement": { primaryService: "Pulmonology", caseType: "Procedure" },
+  // General
+  "Bedside Procedure": { primaryService: "Hospitalist", caseType: "Procedure" },
+  "Wound Care": { primaryService: "General Surgery", caseType: "Procedure" },
+  "Dressing Change": { primaryService: "General Surgery", caseType: "Procedure" },
+  "Scheduled Activity": { primaryService: "Hospitalist", caseType: "Procedure" },
+  // Administrative
+  "Direct Admit": { primaryService: "Hospitalist", caseType: "Direct Admit" },
+  "Consultation": { primaryService: "Hospitalist", caseType: "Consultation" },
+  "Follow-up": { primaryService: "Oncology", caseType: "Follow-up" },
+  "Other": { primaryService: "Hospitalist", caseType: "Procedure" },
+};
+
+// Get primary service and case type based on procedure type(s)
+const getDefaultsForProcedures = (procedureNames: string[]): { primaryService: string | null; caseType: string | null } => {
+  if (procedureNames.length === 0) return { primaryService: null, caseType: null };
+
+  // Check if any procedure contains "chemo" - always oncology + procedure
+  const hasChemo = procedureNames.some(p => p.toLowerCase().includes("chemo"));
+  if (hasChemo) return { primaryService: "Oncology", caseType: "Procedure" };
+
+  // Check if any procedure is oncology-related (LP, BMA, BMBx, IT)
+  const oncologyProcedures = ["LP", "BMA", "BMBx", "IT Chemo"];
+  const hasOncology = procedureNames.some(p => oncologyProcedures.includes(p));
+  if (hasOncology) return { primaryService: "Oncology", caseType: "Procedure" };
+
+  // Use the mapping for the first procedure
+  for (const proc of procedureNames) {
+    if (PROCEDURE_DEFAULTS[proc]) {
+      return PROCEDURE_DEFAULTS[proc];
+    }
+  }
+
+  return { primaryService: null, caseType: null };
+};
+
+// Backward compatible helper
+const getPrimaryServiceForProcedures = (procedureNames: string[]): string | null => {
+  return getDefaultsForProcedures(procedureNames).primaryService;
+};
+
 const INTERVENTIONS = [
+  "None",
   "Lumbar Puncture",
   "Bone Marrow Aspiration",
   "Bone Marrow Biopsy",
@@ -80,6 +154,7 @@ const INTERVENTIONS = [
 ];
 
 const ACTIVITY_TITLES = [
+  "None",
   "LP",
   "BMA",
   "BMBx",
@@ -163,11 +238,35 @@ const PRIMARY_TO_SERVICE: Record<string, string> = {
 };
 
 export default function Calendar() {
-  const { data: activities, refetch: refetchActivities } = trpc.activities.list.useQuery();
+  const { data: activities, refetch: refetchActivities, isLoading: activitiesLoading, error: activitiesError } = trpc.activities.list.useQuery();
   const { data: patients, refetch: refetchPatients } = trpc.patients.list.useQuery();
   const { data: rooms } = trpc.activities.getRooms.useQuery();
   const { data: staff } = trpc.activities.getStaff.useQuery();
   const { data: activityTypes } = trpc.activities.getActivityTypes.useQuery();
+
+  // Debug logging for activities
+  useEffect(() => {
+    console.log("=== ACTIVITIES DEBUG ===");
+    console.log("Loading:", activitiesLoading);
+    console.log("Error:", activitiesError);
+    console.log("Activities count:", activities?.length);
+    if (activities && activities.length > 0) {
+      console.log("Sample activity:", activities[0]);
+      console.log("Activity dates:", activities.map(a => ({
+        id: a.id,
+        title: a.title,
+        startTime: a.startTime,
+        startTimeType: typeof a.startTime,
+        startTimeDate: new Date(a.startTime).toDateString()
+      })));
+    }
+  }, [activities, activitiesLoading, activitiesError]);
+
+  // User context for smart defaults and learning
+  const { currentUser, trackProcedure, getSuggestedProcedures } = useUser();
+
+  // Notifications
+  const { addNotification } = useNotifications();
 
   // State for editing an activity
   const [editingActivityId, setEditingActivityId] = useState<number | null>(null);
@@ -176,12 +275,33 @@ export default function Calendar() {
   const createPatient = trpc.patients.create.useMutation();
   const createStaff = trpc.activities.createStaff.useMutation();
   const createActivity = trpc.activities.create.useMutation({
-    onSuccess: () => {
+    onSuccess: (_, variables) => {
+      // Track the procedure for learning
+      if (variables.title) {
+        trackProcedure(variables.title);
+      }
+
+      // Send notification
+      const patient = patients?.find(p => p.id === variables.patientId);
+      const patientName = patient ? `${patient.firstName} ${patient.lastName}` : "Patient";
+      addNotification({
+        type: "success",
+        title: "Activity Scheduled",
+        message: `${variables.title} for ${patientName} on ${new Date(variables.startTime).toLocaleDateString()} at ${new Date(variables.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
+        actionUrl: "/calendar",
+        actionLabel: "View Calendar",
+      });
+
       refetchActivities();
       refetchPatients();
       setShowNewProcedure(false);
       setEditingActivityId(null);
+      localStorage.removeItem("encounterFormDrafts");
       resetForm();
+    },
+    onError: (error) => {
+      console.error("Failed to create activity:", error);
+      alert(`Failed to create activity: ${error.message}`);
     },
   });
 
@@ -191,7 +311,12 @@ export default function Calendar() {
       setSelectedActivity(null);
       setShowNewProcedure(false);
       setEditingActivityId(null);
+      localStorage.removeItem("encounterFormDrafts");
       resetForm();
+    },
+    onError: (error) => {
+      console.error("Failed to update activity:", error);
+      alert(`Failed to update activity: ${error.message}`);
     },
   });
 
@@ -200,10 +325,14 @@ export default function Calendar() {
   // Patient mode: "existing" or "new"
   const [patientMode, setPatientMode] = useState<"existing" | "new">("existing");
 
-  // Form state for new case - defaults match Oncology service
+  // Form state for new case - defaults based on user's service line
+  const userServiceLine = currentUser?.serviceLine || "Oncology";
+  const suggestedProcs = getSuggestedProcedures();
+  const defaultProcedure = suggestedProcs[0] || "LP";
+
   const [formPatientId, setFormPatientId] = useState<number | "">("");
-  const [formTitle, setFormTitle] = useState("LP");
-  const [formService, setFormService] = useState("Oncology");
+  const [formTitle, setFormTitle] = useState(defaultProcedure);
+  const [formService, setFormService] = useState(userServiceLine);
   const [formCaseType, setFormCaseType] = useState("Procedure");
   const [formPriority, setFormPriority] = useState("Planned");
   const [formRoomId, setFormRoomId] = useState<number | "">("");
@@ -220,7 +349,7 @@ export default function Calendar() {
   const [formActivityTypeIds, setFormActivityTypeIds] = useState<number[]>([]); // LP, BMA, PICC, IR - multiple allowed
   const [formStatus, setFormStatus] = useState("Pending");
   const [formOtherIntervention, setFormOtherIntervention] = useState("");
-  const [formPmdService, setFormPmdService] = useState("Oncology");
+  const [formPmdService, setFormPmdService] = useState(userServiceLine);
 
   // New patient form fields
   const [newPatientMrn, setNewPatientMrn] = useState("");
@@ -229,6 +358,46 @@ export default function Calendar() {
   const [newPatientDob, setNewPatientDob] = useState("");
   const [newPatientGender, setNewPatientGender] = useState("");
   const [newPatientDisposition, setNewPatientDisposition] = useState("");
+
+  // Smart suggestions - patient's previous visits
+  const [patientLastVisit, setPatientLastVisit] = useState<any>(null);
+  const [showRepeatSuggestion, setShowRepeatSuggestion] = useState(false);
+
+  // Get patient's recent activities when patient is selected
+  const getPatientHistory = (patientId: number) => {
+    const patientActivities = activities?.filter(a => a.patientId === patientId) || [];
+    if (patientActivities.length === 0) return null;
+
+    // Sort by date descending to get most recent
+    const sorted = [...patientActivities].sort((a, b) =>
+      new Date(b.startTime).getTime() - new Date(a.startTime).getTime()
+    );
+    return sorted[0]; // Return most recent visit
+  };
+
+  // Auto-fill form from previous visit
+  const repeatLastVisit = () => {
+    if (!patientLastVisit) return;
+
+    // Find the activity type ID
+    const matchingType = activityTypes?.find(t => t.name === patientLastVisit.title);
+    if (matchingType) {
+      setFormActivityTypeIds([matchingType.id]);
+    }
+
+    setFormTitle(patientLastVisit.title || "");
+    setFormService(patientLastVisit.service || "Oncology");
+    setFormCaseType(patientLastVisit.caseType || "Procedure");
+    setFormPriority(patientLastVisit.priority || "Planned");
+    setFormSedationRequired(patientLastVisit.sedationRequired === 1);
+    setFormSedationType(patientLastVisit.sedationType || "Conscious Sedation");
+    setFormSedationProvider(patientLastVisit.sedationProvider || "Intensivist");
+    if (patientLastVisit.pmdId) setFormPmdId(patientLastVisit.pmdId);
+    if (patientLastVisit.sedationistId) setFormSedationistId(patientLastVisit.sedationistId);
+    if (patientLastVisit.roomId) setFormRoomId(patientLastVisit.roomId);
+
+    setShowRepeatSuggestion(false);
+  };
 
   // New doctor fields
   const [showNewProcedureMD, setShowNewProcedureMD] = useState(false);
@@ -250,6 +419,599 @@ export default function Calendar() {
     const saved = localStorage.getItem('customInterventions');
     return saved ? JSON.parse(saved) : [];
   });
+
+  // Check for newActivity param on MOUNT - just open form, don't clear URL yet
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("newActivity") === "true" || params.get("new") === "1") {
+      console.log("Mount: Opening new activity form from URL");
+      setShowNewProcedure(true);
+      // Don't clear URL here - let the pending data effect handle it after applying data
+    }
+    // Check if we should show drafts prompt (from dashboard link)
+    if (params.get("showDrafts") === "true") {
+      console.log("Mount: Showing drafts prompt from URL");
+      if (hasDraft()) {
+        setShowDraftPrompt(true);
+      }
+      // Clear the URL param
+      window.history.replaceState({}, "", "/calendar");
+    }
+  }, []);
+
+  // Apply pending voice data when form opens AND patients are loaded
+  const [pendingDataApplied, setPendingDataApplied] = useState(false);
+  const [showDraftPrompt, setShowDraftPrompt] = useState(false);
+
+  // Handle opening the form - check for saved draft
+  const handleOpenNewForm = () => {
+    if (hasDraft()) {
+      setShowDraftPrompt(true);
+    } else {
+      setShowNewProcedure(true);
+    }
+  };
+
+  const handleRestoreDraft = (index: number = 0) => {
+    setShowDraftPrompt(false);
+    setShowNewProcedure(true);
+    restoreDraft(index);
+  };
+
+  const handleStartFresh = () => {
+    setShowDraftPrompt(false);
+    resetForm();
+    setShowNewProcedure(true);
+  };
+
+  const handleDeleteDraft = (index: number) => {
+    clearDraft(index);
+    // If no more drafts, close the prompt
+    if (!hasDraft()) {
+      setShowDraftPrompt(false);
+      resetForm();
+      setShowNewProcedure(true);
+    }
+  };
+
+  useEffect(() => {
+    console.log("Pending data effect - showNewProcedure:", showNewProcedure, "patients:", patients?.length, "applied:", pendingDataApplied);
+
+    // Only run once when form opens and patients query has completed
+    if (!showNewProcedure) {
+      console.log("Form not open yet");
+      return;
+    }
+    if (patients === undefined) {
+      console.log("Patients not loaded yet");
+      return;
+    }
+    if (pendingDataApplied) {
+      console.log("Already applied");
+      return;
+    }
+
+    const pendingData = getPendingFormData();
+    console.log("Retrieved pending data:", pendingData);
+    if (!pendingData) {
+      console.log("No pending data in localStorage");
+      return;
+    }
+
+    console.log("=== APPLYING PENDING VOICE DATA ===");
+    console.log("Data:", pendingData);
+    setPendingDataApplied(true);
+
+    // Search for existing patient by name or MRN
+    const searchFirst = (pendingData.firstName || "").toLowerCase();
+    const searchLast = (pendingData.lastName || "").toLowerCase();
+    const searchMrn = pendingData.mrn || "";
+
+    let foundPatient = null;
+
+    if (searchFirst || searchLast || searchMrn) {
+      console.log("Searching for:", { searchFirst, searchLast, searchMrn });
+
+      // Search by MRN first (exact match)
+      if (searchMrn) {
+        foundPatient = patients.find(p => p.mrn === searchMrn);
+      }
+
+      // If not found by MRN, search by name
+      if (!foundPatient && (searchFirst || searchLast)) {
+        foundPatient = patients.find(p => {
+          const pFirst = p.firstName.toLowerCase();
+          const pLast = p.lastName.toLowerCase();
+          if (searchFirst && searchLast) {
+            return pFirst.includes(searchFirst) && pLast.includes(searchLast);
+          } else if (searchFirst) {
+            return pFirst.includes(searchFirst);
+          } else if (searchLast) {
+            return pLast.includes(searchLast);
+          }
+          return false;
+        });
+      }
+    }
+
+    if (foundPatient) {
+      console.log("Found existing patient:", foundPatient);
+      setPatientMode("existing");
+      setFormPatientId(foundPatient.id);
+    } else if (pendingData.firstName || pendingData.lastName || pendingData.mrn) {
+      console.log("No matching patient, switching to new patient mode");
+      setPatientMode("new");
+      if (pendingData.firstName) setNewPatientFirstName(pendingData.firstName);
+      if (pendingData.lastName) setNewPatientLastName(pendingData.lastName);
+      if (pendingData.mrn) setNewPatientMrn(pendingData.mrn);
+    }
+
+    // Fill procedure info - handle procedures array for checkboxes
+    if (pendingData.procedures && Array.isArray(pendingData.procedures) && activityTypes) {
+      console.log("Looking for procedures:", pendingData.procedures);
+      const matchedIds: number[] = [];
+      const matchedNames: string[] = [];
+
+      // Aliases for common procedure names
+      const procedureAliases: Record<string, string[]> = {
+        "IT Chemo": ["intrathecal", "intrathecal chemo", "intrathecal chemotherapy", "it chemo", "it"],
+        "LP": ["lumbar puncture", "lp", "spinal tap"],
+        "BMA": ["bone marrow aspiration", "bma", "marrow aspiration"],
+        "BMBx": ["bone marrow biopsy", "bmbx", "marrow biopsy"],
+        "PICC": ["picc", "picc line", "peripherally inserted"],
+        "Central Line": ["central line", "central venous", "cvl"],
+        "Port Access": ["port access", "port", "mediport"],
+      };
+
+      for (const proc of pendingData.procedures) {
+        const procLower = proc.toLowerCase().trim();
+        let match = null;
+
+        // First try direct match
+        match = activityTypes.find(t => {
+          const nameLower = t.name.toLowerCase();
+          return nameLower === procLower || nameLower.replace(/\s+/g, '') === procLower.replace(/\s+/g, '');
+        });
+
+        // If no direct match, try aliases
+        if (!match) {
+          for (const [typeName, aliases] of Object.entries(procedureAliases)) {
+            if (aliases.some(alias => procLower.includes(alias) || alias.includes(procLower))) {
+              match = activityTypes.find(t => t.name === typeName);
+              if (match) break;
+            }
+          }
+        }
+
+        // Fallback to partial match
+        if (!match) {
+          match = activityTypes.find(t => {
+            const nameLower = t.name.toLowerCase();
+            return nameLower.includes(procLower) || procLower.includes(nameLower);
+          });
+        }
+
+        if (match && !matchedIds.includes(match.id)) {
+          matchedIds.push(match.id);
+          matchedNames.push(match.name);
+          console.log(`Matched "${proc}" to activity type: ${match.name} (id: ${match.id})`);
+        }
+      }
+
+      if (matchedIds.length > 0) {
+        setFormActivityTypeIds(matchedIds);
+        // Set title based on first procedure or combined
+        setFormTitle(matchedNames.join(" + "));
+        console.log("Set activity type IDs:", matchedIds);
+
+        // Auto-set Primary Service and Case Type based on procedures
+        const defaults = getDefaultsForProcedures(matchedNames);
+        if (defaults.primaryService) {
+          setFormPmdService(defaults.primaryService);
+          console.log("Auto-set Primary Service:", defaults.primaryService);
+        }
+        if (defaults.caseType) {
+          setFormCaseType(defaults.caseType);
+          console.log("Auto-set Case Type:", defaults.caseType);
+        }
+      }
+    } else if (pendingData.title) {
+      // Fallback to old title field
+      setFormTitle(pendingData.title);
+    }
+
+    if (pendingData.date) {
+      setFormStartDate(pendingData.date);
+      // Future date means it's planned
+      setFormPriority("Planned");
+    }
+    if (pendingData.startTime) {
+      setFormStartTime(pendingData.startTime);
+      // Auto-set end time 30 minutes after start
+      const [hours, mins] = pendingData.startTime.split(':').map(Number);
+      const endDate = new Date(2000, 0, 1, hours, mins + 30);
+      const endHours = endDate.getHours().toString().padStart(2, '0');
+      const endMins = endDate.getMinutes().toString().padStart(2, '0');
+      setFormEndTime(`${endHours}:${endMins}`);
+      console.log(`Set end time: ${endHours}:${endMins} (30 min after ${pendingData.startTime})`);
+    }
+    if (pendingData.service) {
+      const matchedService = SERVICES.find(s =>
+        s.toLowerCase().includes(pendingData.service?.toLowerCase() || "")
+      );
+      if (matchedService) setFormService(matchedService);
+    }
+
+    // Handle sedationist - search staff list and set sedation required
+    if (pendingData.sedationist && staff) {
+      console.log("Looking for sedationist:", pendingData.sedationist);
+      const sedName = pendingData.sedationist.toLowerCase();
+      const sedationistMatch = staff.find(s => {
+        const first = s.firstName || '';
+        const last = s.lastName || '';
+        const fullName = `${first} ${last}`.toLowerCase();
+        const lastFirst = `${last} ${first}`.toLowerCase();
+        return fullName.includes(sedName) ||
+               lastFirst.includes(sedName) ||
+               first.toLowerCase().includes(sedName) ||
+               last.toLowerCase().includes(sedName);
+      });
+      if (sedationistMatch) {
+        console.log("Found sedationist:", sedationistMatch);
+        setFormSedationRequired(true);
+        setFormSedationistId(sedationistMatch.id);
+      } else {
+        // Still mark sedation required even if we can't match the name
+        setFormSedationRequired(true);
+        console.log("Sedationist mentioned but not found in staff list");
+      }
+    }
+
+    // Handle PMD - search staff list
+    if (pendingData.pmd && staff) {
+      console.log("Looking for PMD:", pendingData.pmd);
+      const pmdName = pendingData.pmd.toLowerCase();
+      const pmdMatch = staff.find(s => {
+        const first = s.firstName || '';
+        const last = s.lastName || '';
+        const fullName = `${first} ${last}`.toLowerCase();
+        const lastFirst = `${last} ${first}`.toLowerCase();
+        return fullName.includes(pmdName) ||
+               lastFirst.includes(pmdName) ||
+               first.toLowerCase().includes(pmdName) ||
+               last.toLowerCase().includes(pmdName);
+      });
+      if (pmdMatch) {
+        console.log("Found PMD:", pmdMatch);
+        setFormPmdId(pmdMatch.id);
+      }
+    }
+
+    // Apply notes from voice scribe
+    if (pendingData.notes) {
+      console.log("Applying notes from voice:", pendingData.notes);
+      setFormNotes(pendingData.notes);
+    }
+
+    // Clear URL params after applying data
+    window.history.replaceState({}, "", "/calendar");
+    console.log("Pending voice data applied successfully!");
+  }, [showNewProcedure, patients, pendingDataApplied, activityTypes, staff]);
+
+  // Reset pendingDataApplied when form closes
+  useEffect(() => {
+    if (!showNewProcedure) {
+      setPendingDataApplied(false);
+    }
+  }, [showNewProcedure]);
+
+  // Voice command listener for form filling
+  useEffect(() => {
+    const handleVoiceCommand = (event: Event) => {
+      const detail = (event as CustomEvent<VoiceCommandDetail>).detail;
+      console.log("Voice command received:", detail);
+
+      if (detail.type === "fillField") {
+        // Auto-switch to new patient mode for patient fields
+        if (detail.field === "firstName" || detail.field === "lastName" || detail.field === "mrn") {
+          setPatientMode("new");
+        }
+
+        switch (detail.field) {
+          case "firstName":
+            setNewPatientFirstName(detail.value || "");
+            break;
+          case "lastName":
+            setNewPatientLastName(detail.value || "");
+            break;
+          case "mrn":
+            setNewPatientMrn(detail.value || "");
+            break;
+          case "title":
+            setFormTitle(detail.value || "");
+            break;
+          case "date":
+            setFormStartDate(detail.value || "");
+            break;
+          case "startTime":
+            setFormStartTime(detail.value || "");
+            break;
+          case "service":
+            // Find matching service
+            const matchedService = SERVICES.find(s =>
+              s.toLowerCase().includes(detail.value?.toLowerCase() || "")
+            );
+            if (matchedService) setFormService(matchedService);
+            break;
+          case "patientSearch":
+            // Search for patient by name
+            const searchVal = detail.value?.toLowerCase() || "";
+            const matchedPatient = patients?.find(p =>
+              p.firstName.toLowerCase().includes(searchVal) ||
+              p.lastName.toLowerCase().includes(searchVal) ||
+              `${p.firstName} ${p.lastName}`.toLowerCase().includes(searchVal)
+            );
+            if (matchedPatient) {
+              setFormPatientId(matchedPatient.id);
+              setPatientMode("existing");
+            }
+            break;
+        }
+      } else if (detail.type === "realtime") {
+        // Real-time field updates as user speaks
+        switch (detail.field) {
+          case "firstName":
+            setNewPatientFirstName(detail.value || "");
+            break;
+          case "lastName":
+            setNewPatientLastName(detail.value || "");
+            break;
+          case "mrn":
+            setNewPatientMrn(detail.value || "");
+            break;
+          case "title":
+            setFormTitle(detail.value || "");
+            break;
+          case "notes":
+            setFormNotes(detail.value || "");
+            break;
+          case "date":
+            // Parse spoken date
+            let dateVal = detail.value || "";
+            if (dateVal.includes("today")) {
+              dateVal = new Date().toISOString().split("T")[0];
+            } else if (dateVal.includes("tomorrow")) {
+              const tomorrow = new Date();
+              tomorrow.setDate(tomorrow.getDate() + 1);
+              dateVal = tomorrow.toISOString().split("T")[0];
+            }
+            setFormStartDate(dateVal);
+            break;
+          case "startTime":
+            // Parse spoken time
+            const timeMatch = (detail.value || "").match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?/i);
+            if (timeMatch) {
+              let hours = parseInt(timeMatch[1]);
+              const minutes = timeMatch[2] ? parseInt(timeMatch[2]) : 0;
+              const period = timeMatch[3]?.toLowerCase().replace(".", "");
+              if (period === "pm" && hours < 12) hours += 12;
+              if (period === "am" && hours === 12) hours = 0;
+              setFormStartTime(`${hours.toString().padStart(2, "0")}:${minutes.toString().padStart(2, "0")}`);
+            }
+            break;
+        }
+      } else if (detail.type === "action") {
+        switch (detail.action) {
+          case "newPatient":
+            setPatientMode("new");
+            break;
+          case "existingPatient":
+            setPatientMode("existing");
+            break;
+          case "save":
+            // Find and click submit button
+            const submitBtn = document.querySelector('button[type="submit"]') as HTMLButtonElement;
+            if (submitBtn) submitBtn.click();
+            break;
+          case "cancel":
+            setShowNewProcedure(false);
+            resetForm();
+            break;
+        }
+      } else if (detail.type === "bulkFill" && detail.data) {
+        // Handle bulk fill with patient search first
+        const data = detail.data;
+        console.log("Bulk fill received:", data);
+
+        // Search for existing patient first
+        const searchFirst = (data.firstName || "").toLowerCase();
+        const searchLast = (data.lastName || "").toLowerCase();
+        const searchMrn = data.mrn || "";
+
+        let foundPatient = null;
+
+        if (patients && (searchFirst || searchLast || searchMrn)) {
+          // Search by MRN first (exact match)
+          if (searchMrn) {
+            foundPatient = patients.find(p => p.mrn === searchMrn);
+          }
+
+          // If not found by MRN, search by name
+          if (!foundPatient && (searchFirst || searchLast)) {
+            foundPatient = patients.find(p => {
+              const pFirst = p.firstName.toLowerCase();
+              const pLast = p.lastName.toLowerCase();
+              if (searchFirst && searchLast) {
+                return pFirst.includes(searchFirst) && pLast.includes(searchLast);
+              } else if (searchFirst) {
+                return pFirst.includes(searchFirst);
+              } else if (searchLast) {
+                return pLast.includes(searchLast);
+              }
+              return false;
+            });
+          }
+        }
+
+        if (foundPatient) {
+          console.log("Found existing patient:", foundPatient);
+          setPatientMode("existing");
+          setFormPatientId(foundPatient.id);
+        } else if (data.firstName || data.lastName || data.mrn) {
+          console.log("No match, switching to new patient");
+          setPatientMode("new");
+          if (data.firstName) setNewPatientFirstName(data.firstName);
+          if (data.lastName) setNewPatientLastName(data.lastName);
+          if (data.mrn) setNewPatientMrn(data.mrn);
+        }
+
+        // Fill procedure fields - handle procedures array for checkboxes
+        if (data.procedures && Array.isArray(data.procedures) && activityTypes) {
+          console.log("BulkFill - Looking for procedures:", data.procedures);
+          const matchedIds: number[] = [];
+          const matchedNames: string[] = [];
+
+          // Aliases for common procedure names
+          const procedureAliases: Record<string, string[]> = {
+            "IT Chemo": ["intrathecal", "intrathecal chemo", "intrathecal chemotherapy", "it chemo", "it"],
+            "LP": ["lumbar puncture", "lp", "spinal tap"],
+            "BMA": ["bone marrow aspiration", "bma", "marrow aspiration"],
+            "BMBx": ["bone marrow biopsy", "bmbx", "marrow biopsy"],
+            "PICC": ["picc", "picc line", "peripherally inserted"],
+            "Central Line": ["central line", "central venous", "cvl"],
+            "Port Access": ["port access", "port", "mediport"],
+          };
+
+          for (const proc of data.procedures) {
+            const procLower = proc.toLowerCase().trim();
+            let match = null;
+
+            // First try direct match
+            match = activityTypes.find((t: { id: number; name: string }) => {
+              const nameLower = t.name.toLowerCase();
+              return nameLower === procLower || nameLower.replace(/\s+/g, '') === procLower.replace(/\s+/g, '');
+            });
+
+            // If no direct match, try aliases
+            if (!match) {
+              for (const [typeName, aliases] of Object.entries(procedureAliases)) {
+                if (aliases.some(alias => procLower.includes(alias) || alias.includes(procLower))) {
+                  match = activityTypes.find((t: { id: number; name: string }) => t.name === typeName);
+                  if (match) break;
+                }
+              }
+            }
+
+            // Fallback to partial match
+            if (!match) {
+              match = activityTypes.find((t: { id: number; name: string }) => {
+                const nameLower = t.name.toLowerCase();
+                return nameLower.includes(procLower) || procLower.includes(nameLower);
+              });
+            }
+
+            if (match && !matchedIds.includes(match.id)) {
+              matchedIds.push(match.id);
+              matchedNames.push(match.name);
+              console.log(`Matched "${proc}" to activity type: ${match.name} (id: ${match.id})`);
+            }
+          }
+
+          if (matchedIds.length > 0) {
+            setFormActivityTypeIds(matchedIds);
+            setFormTitle(matchedNames.join(" + "));
+            console.log("Set activity type IDs:", matchedIds);
+
+            // Auto-set Primary Service and Case Type based on procedures
+            const defaults = getDefaultsForProcedures(matchedNames);
+            if (defaults.primaryService) {
+              setFormPmdService(defaults.primaryService);
+              console.log("Auto-set Primary Service:", defaults.primaryService);
+            }
+            if (defaults.caseType) {
+              setFormCaseType(defaults.caseType);
+              console.log("Auto-set Case Type:", defaults.caseType);
+            }
+          }
+        } else if (data.title) {
+          setFormTitle(data.title);
+        }
+
+        if (data.date) {
+          setFormStartDate(data.date);
+          // Future date means it's planned
+          setFormPriority("Planned");
+        }
+        if (data.startTime) {
+          setFormStartTime(data.startTime);
+          // Auto-set end time 30 minutes after start
+          const [hours, mins] = data.startTime.split(':').map(Number);
+          const endDate = new Date(2000, 0, 1, hours, mins + 30);
+          const endHours = endDate.getHours().toString().padStart(2, '0');
+          const endMins = endDate.getMinutes().toString().padStart(2, '0');
+          setFormEndTime(`${endHours}:${endMins}`);
+          console.log(`Set end time: ${endHours}:${endMins} (30 min after ${data.startTime})`);
+        }
+        if (data.service) {
+          const matchedService = SERVICES.find(s =>
+            s.toLowerCase().includes(data.service?.toLowerCase() || "")
+          );
+          if (matchedService) setFormService(matchedService);
+        }
+        // Handle sedationist - search staff list and set sedation required
+        if (data.sedationist && staff) {
+          console.log("BulkFill - Looking for sedationist:", data.sedationist);
+          const sedName = data.sedationist.toLowerCase();
+          const sedationistMatch = staff.find(s => {
+            const first = s.firstName || '';
+            const last = s.lastName || '';
+            const fullName = `${first} ${last}`.toLowerCase();
+            const lastFirst = `${last} ${first}`.toLowerCase();
+            return fullName.includes(sedName) ||
+                   lastFirst.includes(sedName) ||
+                   first.toLowerCase().includes(sedName) ||
+                   last.toLowerCase().includes(sedName);
+          });
+          if (sedationistMatch) {
+            console.log("Found sedationist:", sedationistMatch);
+            setFormSedationRequired(true);
+            setFormSedationistId(sedationistMatch.id);
+          } else {
+            setFormSedationRequired(true);
+          }
+        }
+
+        // Handle PMD - search staff list
+        if (data.pmd && staff) {
+          console.log("BulkFill - Looking for PMD:", data.pmd);
+          const pmdName = data.pmd.toLowerCase();
+          const pmdMatch = staff.find(s => {
+            const first = s.firstName || '';
+            const last = s.lastName || '';
+            const fullName = `${first} ${last}`.toLowerCase();
+            const lastFirst = `${last} ${first}`.toLowerCase();
+            return fullName.includes(pmdName) ||
+                   lastFirst.includes(pmdName) ||
+                   first.toLowerCase().includes(pmdName) ||
+                   last.toLowerCase().includes(pmdName);
+          });
+          if (pmdMatch) {
+            console.log("Found PMD:", pmdMatch);
+            setFormPmdId(pmdMatch.id);
+          }
+        }
+
+        // Apply notes from voice scribe
+        if (data.notes) {
+          console.log("Applying notes from bulkFill:", data.notes);
+          setFormNotes(data.notes);
+        }
+      }
+    };
+
+    window.addEventListener(VOICE_COMMAND_EVENT, handleVoiceCommand);
+    return () => window.removeEventListener(VOICE_COMMAND_EVENT, handleVoiceCommand);
+  }, [patients, activityTypes, staff]);
 
   // Save custom options to localStorage when they change
   useEffect(() => {
@@ -298,6 +1060,180 @@ export default function Calendar() {
     setNewSedationMDName("");
   };
 
+  // Draft queue functionality (up to 3 drafts)
+  const DRAFTS_KEY = "encounterFormDrafts";
+  const MAX_DRAFTS = 3;
+
+  const getDrafts = (): any[] => {
+    try {
+      const saved = localStorage.getItem(DRAFTS_KEY);
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  };
+
+  const saveDraft = () => {
+    // Only save if there's meaningful data
+    const hasData = formPatientId || newPatientFirstName || newPatientLastName ||
+                    formStartDate || formStartTime || formNotes || formActivityTypeIds.length > 0;
+    if (!hasData) return;
+
+    const draft = {
+      id: Date.now(),
+      patientMode,
+      formPatientId,
+      formTitle,
+      formService,
+      formCaseType,
+      formPriority,
+      formRoomId,
+      formStartDate,
+      formStartTime,
+      formEndTime,
+      formSedationRequired,
+      formSedationType,
+      formSedationProvider,
+      formSedationistId,
+      formPmdId,
+      formIntervention,
+      formNotes,
+      formActivityTypeIds,
+      formStatus,
+      formOtherIntervention,
+      formPmdService,
+      newPatientMrn,
+      newPatientFirstName,
+      newPatientLastName,
+      newPatientDob,
+      newPatientGender,
+      newPatientDisposition,
+      savedAt: new Date().toISOString(),
+    };
+
+    const drafts = getDrafts();
+    // Add new draft at the beginning
+    drafts.unshift(draft);
+    // Keep only the most recent MAX_DRAFTS
+    const trimmed = drafts.slice(0, MAX_DRAFTS);
+    localStorage.setItem(DRAFTS_KEY, JSON.stringify(trimmed));
+    console.log("Draft saved, queue size:", trimmed.length);
+  };
+
+  const restoreDraft = (index: number = 0) => {
+    try {
+      const drafts = getDrafts();
+      if (index >= drafts.length) return false;
+
+      const draft = drafts[index];
+      console.log("Restoring draft:", draft);
+
+      setPatientMode(draft.patientMode || "existing");
+      setFormPatientId(draft.formPatientId || "");
+      setFormTitle(draft.formTitle || "LP");
+      setFormService(draft.formService || "Oncology");
+      setFormCaseType(draft.formCaseType || "Procedure");
+      setFormPriority(draft.formPriority || "Planned");
+      setFormRoomId(draft.formRoomId || "");
+      setFormStartDate(draft.formStartDate || "");
+      setFormStartTime(draft.formStartTime || "");
+      setFormEndTime(draft.formEndTime || "");
+      setFormSedationRequired(draft.formSedationRequired ?? true);
+      setFormSedationType(draft.formSedationType || "Conscious Sedation");
+      setFormSedationProvider(draft.formSedationProvider || "Intensivist");
+      setFormSedationistId(draft.formSedationistId || "");
+      setFormPmdId(draft.formPmdId || "");
+      setFormIntervention(draft.formIntervention || "Lumbar Puncture");
+      setFormNotes(draft.formNotes || "");
+      setFormActivityTypeIds(draft.formActivityTypeIds || []);
+      setFormStatus(draft.formStatus || "Pending");
+      setFormOtherIntervention(draft.formOtherIntervention || "");
+      setFormPmdService(draft.formPmdService || "Oncology");
+      setNewPatientMrn(draft.newPatientMrn || "");
+      setNewPatientFirstName(draft.newPatientFirstName || "");
+      setNewPatientLastName(draft.newPatientLastName || "");
+      setNewPatientDob(draft.newPatientDob || "");
+      setNewPatientGender(draft.newPatientGender || "");
+      setNewPatientDisposition(draft.newPatientDisposition || "");
+
+      // Remove this draft from the queue
+      drafts.splice(index, 1);
+      localStorage.setItem(DRAFTS_KEY, JSON.stringify(drafts));
+
+      return true;
+    } catch (e) {
+      console.error("Error restoring draft:", e);
+      return false;
+    }
+  };
+
+  const clearDraft = (index?: number) => {
+    if (index === undefined) {
+      // Clear all drafts
+      localStorage.removeItem(DRAFTS_KEY);
+    } else {
+      // Clear specific draft
+      const drafts = getDrafts();
+      drafts.splice(index, 1);
+      localStorage.setItem(DRAFTS_KEY, JSON.stringify(drafts));
+    }
+  };
+
+  const hasDraft = () => {
+    return getDrafts().length > 0;
+  };
+
+  const getDraftSummaries = () => {
+    try {
+      const drafts = getDrafts();
+      return drafts.map((draft, index) => {
+        const patientName = draft.newPatientFirstName && draft.newPatientLastName
+          ? `${draft.newPatientFirstName} ${draft.newPatientLastName}`
+          : draft.formPatientId ? "Existing patient" : "No patient";
+        const savedAt = new Date(draft.savedAt).toLocaleString();
+        return { index, patientName, title: draft.formTitle, date: draft.formStartDate, savedAt };
+      });
+    } catch {
+      return [];
+    }
+  };
+
+  // Track previous state of showNewProcedure for auto-save
+  const prevShowNewProcedure = useRef(showNewProcedure);
+
+  // Auto-save draft when form closes (modal dismissed)
+  useEffect(() => {
+    // If form was open and is now closing
+    if (prevShowNewProcedure.current && !showNewProcedure) {
+      const hasData = formPatientId || newPatientFirstName || newPatientLastName ||
+                      formStartDate || formStartTime || formNotes || formActivityTypeIds.length > 0;
+      if (hasData && !editingActivityId) {
+        // Only auto-save if not editing an existing activity
+        saveDraft();
+        console.log("Auto-saved draft on modal close");
+      }
+    }
+    prevShowNewProcedure.current = showNewProcedure;
+  }, [showNewProcedure]);
+
+  // Auto-save draft when user navigates away from page
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (showNewProcedure) {
+        const hasData = formPatientId || newPatientFirstName || newPatientLastName ||
+                        formStartDate || formStartTime || formNotes || formActivityTypeIds.length > 0;
+        if (hasData) {
+          saveDraft();
+          e.preventDefault();
+          e.returnValue = '';
+        }
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [showNewProcedure, formPatientId, newPatientFirstName, newPatientLastName, formStartDate, formStartTime, formNotes, formActivityTypeIds]);
+
   // Filter staff by specialization
   const sedationists = staff?.filter(s =>
     s.specializations?.includes("Sedationist") ||
@@ -311,7 +1247,7 @@ export default function Calendar() {
     s.specializations?.includes("Peds-Surgery")
   ) || [];
 
-  const [viewType, setViewType] = useState<ViewType>("day");
+  const [viewType, setViewType] = useState<ViewType>("month");
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedActivity, setSelectedActivity] = useState<any>(null);
   const [selectedActivities, setSelectedActivities] = useState<Set<number>>(new Set());
@@ -354,14 +1290,20 @@ export default function Calendar() {
   const [, navigate] = useLocation();
   const searchString = useSearch();
 
-  // Auto-open form if ?new=1 or ?edit=ID in URL
+  // Auto-open form if ?new=1 or ?newActivity=true in URL (handles wouter navigation)
   useEffect(() => {
-    const params = new URLSearchParams(searchString);
+    // Check both wouter searchString and window.location.search
+    const params = new URLSearchParams(searchString || window.location.search);
 
-    if (params.get("new") === "1") {
-      setEditingActivityId(null);
-      setShowNewProcedure(true);
-      navigate("/calendar", { replace: true });
+    if (params.get("new") === "1" || params.get("newActivity") === "true") {
+      // Only process if form isn't already open (avoid re-triggering)
+      if (!showNewProcedure) {
+        console.log("Opening new activity form from wouter searchString");
+        setEditingActivityId(null);
+        // Don't resetForm here - pending data effect will fill fields
+        setShowNewProcedure(true);
+      }
+      // Note: URL will be cleared after pending data is applied
     }
 
     const editId = params.get("edit");
@@ -767,6 +1709,65 @@ export default function Calendar() {
           </Card>
         </div>
 
+        {/* Filtered Activities Panel - Shows when filter is active */}
+        {(filterCaseType !== "All Types" || filterSedation !== "All" || filterService !== "All Services" || filterPriority !== "All Priorities" || searchQuery) && dayActivities.length > 0 && (
+          <Card className="p-4 bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-200">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-semibold text-blue-800 flex items-center gap-2">
+                📋 Filtered Results ({dayActivities.length})
+                {filterCaseType !== "All Types" && <span className="text-xs bg-blue-200 px-2 py-0.5 rounded">{filterCaseType}</span>}
+                {filterSedation !== "All" && <span className="text-xs bg-purple-200 px-2 py-0.5 rounded">{filterSedation}</span>}
+                {filterService !== "All Services" && <span className="text-xs bg-green-200 px-2 py-0.5 rounded">{filterService}</span>}
+              </h3>
+              <button
+                onClick={() => {
+                  setFilterCaseType("All Types");
+                  setFilterSedation("All");
+                  setFilterService("All Services");
+                  setFilterPriority("All Priorities");
+                  setSearchQuery("");
+                }}
+                className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1"
+              >
+                <X size={14} /> Clear filters
+              </button>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2 max-h-48 overflow-y-auto">
+              {dayActivities.map((activity) => {
+                const patient = patients?.find(p => p.id === activity.patientId);
+                const patientName = patient ? `${patient.firstName} ${patient.lastName}` : "Unknown";
+                const room = rooms?.find(r => r.id === activity.roomId);
+                const startTime = new Date(activity.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+                return (
+                  <div
+                    key={activity.id}
+                    onClick={() => handleActivityClick(activity)}
+                    className="flex items-center gap-3 p-2 bg-white rounded-lg border hover:shadow-md cursor-pointer transition-all"
+                  >
+                    <div className="text-sm font-bold text-blue-600 w-16">{startTime}</div>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-medium text-gray-900 truncate">{activity.title}</div>
+                      <div className="text-xs text-gray-500 truncate">
+                        {patientName}
+                        {room && <span className="ml-1 text-blue-500">• {room.name}</span>}
+                      </div>
+                    </div>
+                    <span className={`text-xs px-2 py-0.5 rounded ${
+                      activity.status === "Confirmed" ? "bg-green-100 text-green-700" :
+                      activity.status === "In Progress" ? "bg-orange-100 text-orange-700" :
+                      activity.status === "Completed" ? "bg-gray-100 text-gray-600" :
+                      "bg-blue-100 text-blue-700"
+                    }`}>
+                      {activity.status}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </Card>
+        )}
+
         {/* Timeline View */}
         <Card className="p-4">
           <div className="space-y-1">
@@ -824,13 +1825,15 @@ export default function Calendar() {
     }
 
     return (
-      <div>
-        <div className="grid grid-cols-7 gap-px bg-gray-200 mb-px">
-          {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map(day => (
-            <div key={day} className="bg-gray-100 text-center py-2 font-semibold text-gray-600 text-sm">{day}</div>
-          ))}
+      <div className="overflow-x-auto">
+        <div className="min-w-[700px]">
+          <div className="grid grid-cols-7 gap-px bg-gray-200 mb-px">
+            {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map(day => (
+              <div key={day} className="bg-gray-100 text-center py-2 font-semibold text-gray-600 text-sm">{day}</div>
+            ))}
+          </div>
+          <div className="grid grid-cols-7 gap-px bg-gray-200">{days}</div>
         </div>
-        <div className="grid grid-cols-7 gap-px bg-gray-200">{days}</div>
       </div>
     );
   };
@@ -846,7 +1849,8 @@ export default function Calendar() {
     });
 
     return (
-      <div className="grid grid-cols-7 gap-2">
+      <div className="overflow-x-auto">
+        <div className="grid grid-cols-7 gap-2 min-w-[700px]">
         {days.map((day) => {
           const dayActivities = getActivitiesForDate(day);
           const isToday = day.toDateString() === new Date().toDateString();
@@ -863,6 +1867,7 @@ export default function Calendar() {
             </Card>
           );
         })}
+        </div>
       </div>
     );
   };
@@ -871,10 +1876,15 @@ export default function Calendar() {
     <SchedulerLayout>
       <div className="space-y-4">
         {/* Header */}
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
-            <div className="flex items-center gap-3">
-              <h1 className="text-2xl font-bold text-gray-900">Procedure & Admit Schedule</h1>
+            <div className="flex items-center gap-3 flex-wrap">
+              <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Procedure Schedule</h1>
+              {activities && (
+                <span className="bg-gray-100 text-gray-700 px-2 py-0.5 rounded text-xs font-medium">
+                  {activities.length} total
+                </span>
+              )}
               {filterDoctor !== "all" && (
                 <span className="bg-blue-100 text-blue-800 px-3 py-1 rounded-full text-sm font-medium flex items-center gap-1">
                   📋 My Cases
@@ -892,7 +1902,7 @@ export default function Calendar() {
             </div>
             <p className="text-gray-500 text-sm">Multi-service procedure scheduling with sedation management</p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <Button
               variant={multiSelectMode ? "default" : "outline"}
               size="sm"
@@ -903,12 +1913,28 @@ export default function Calendar() {
                   setMultiSelectMode(true);
                 }
               }}
+              className="text-xs sm:text-sm"
             >
-              {multiSelectMode ? "Cancel Select" : "Select Multiple"}
+              {multiSelectMode ? "Cancel" : "Multi-Select"}
             </Button>
-            <Button onClick={() => setShowNewProcedure(true)} className="flex items-center gap-2">
-              <Plus size={18} />
-              New Activity
+            {hasDraft() && (
+              <Button
+                variant="outline"
+                onClick={() => setShowDraftPrompt(true)}
+                className="flex items-center gap-1 sm:gap-2 text-xs sm:text-sm border-orange-300 text-orange-700 hover:bg-orange-50"
+              >
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-orange-500"></span>
+                </span>
+                <span className="hidden sm:inline">Pending ({getDraftSummaries().length})</span>
+                <span className="sm:hidden">{getDraftSummaries().length}</span>
+              </Button>
+            )}
+            <Button onClick={handleOpenNewForm} className="flex items-center gap-1 sm:gap-2 text-xs sm:text-sm">
+              <Plus size={16} />
+              <span className="hidden sm:inline">New Encounter</span>
+              <span className="sm:hidden">New</span>
             </Button>
           </div>
         </div>
@@ -998,7 +2024,7 @@ export default function Calendar() {
             >
               All Dates
             </button>
-            <div className="border-l border-gray-300 mx-2"></div>
+            <div className="hidden sm:block border-l border-gray-300 mx-2"></div>
             <select
               value={filterDoctor === "all" ? "all" : filterDoctor}
               onChange={(e) => setFilterDoctor(e.target.value === "all" ? "all" : Number(e.target.value))}
@@ -1219,6 +2245,23 @@ export default function Calendar() {
           </div>
         </Card>
 
+        {/* Debug Banner */}
+        {activitiesError && (
+          <div className="bg-red-100 border border-red-300 text-red-700 px-4 py-2 rounded mb-4">
+            Error loading activities: {activitiesError.message}
+          </div>
+        )}
+        {activitiesLoading && (
+          <div className="bg-blue-100 border border-blue-300 text-blue-700 px-4 py-2 rounded mb-4">
+            Loading activities...
+          </div>
+        )}
+        {!activitiesLoading && !activitiesError && activities?.length === 0 && (
+          <div className="bg-yellow-100 border border-yellow-300 text-yellow-700 px-4 py-2 rounded mb-4">
+            No activities found in database. Create your first encounter using the "New Encounter" button above.
+          </div>
+        )}
+
         {/* Calendar View */}
         {viewType === "day" && renderDayView()}
         {viewType === "week" && renderWeekView()}
@@ -1251,7 +2294,7 @@ export default function Calendar() {
                   </button>
                 </div>
 
-                <div className="grid grid-cols-2 gap-6">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
                   {/* Patient Info */}
                   <div className="space-y-4">
                     <div>
@@ -1383,6 +2426,27 @@ export default function Calendar() {
                   </div>
                 )}
 
+                {/* Created/Updated By */}
+                <div className="mt-4 p-3 bg-blue-50 rounded-lg border border-blue-100">
+                  <div className="flex justify-between items-center text-sm">
+                    <div>
+                      <span className="text-blue-600">Created by: </span>
+                      <span className="font-medium text-blue-800">
+                        {selectedActivity.createdByName || `User #${selectedActivity.createdBy}` || "Unknown"}
+                      </span>
+                      <span className="text-blue-400 ml-2">
+                        {new Date(selectedActivity.createdAt).toLocaleDateString()} at {new Date(selectedActivity.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    </div>
+                    {selectedActivity.updatedByName && selectedActivity.updatedBy !== selectedActivity.createdBy && (
+                      <div>
+                        <span className="text-blue-600">Updated by: </span>
+                        <span className="font-medium text-blue-800">{selectedActivity.updatedByName}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
                 {/* Quick Status Actions */}
                 <div className="mt-6 space-y-3">
                   <h3 className="font-semibold text-gray-700 text-sm">Quick Actions</h3>
@@ -1477,25 +2541,67 @@ export default function Calendar() {
           </div>
         )}
 
+        {/* Draft Restore Prompt */}
+        {showDraftPrompt && (
+          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+            <Card className="w-full max-w-lg p-6">
+              <h3 className="text-lg font-bold mb-2">Pending Encounters ({getDraftSummaries().length})</h3>
+              <p className="text-gray-600 mb-4">
+                You have unsaved encounter forms. Select one to resume or start fresh.
+              </p>
+              <div className="space-y-2 mb-4 max-h-64 overflow-y-auto">
+                {getDraftSummaries().map((summary) => (
+                  <div key={summary.index} className="bg-gray-50 p-3 rounded-lg text-sm flex items-center justify-between gap-2">
+                    <div className="flex-1 min-w-0">
+                      <div className="font-medium truncate">{summary.patientName} - {summary.title}</div>
+                      <div className="text-gray-500 text-xs">
+                        {summary.date && <span>{summary.date} · </span>}
+                        {summary.savedAt}
+                      </div>
+                    </div>
+                    <div className="flex gap-1 flex-shrink-0">
+                      <Button size="sm" variant="ghost" className="text-red-600 px-2" onClick={() => handleDeleteDraft(summary.index)}>
+                        ✕
+                      </Button>
+                      <Button size="sm" onClick={() => handleRestoreDraft(summary.index)}>
+                        Resume
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="flex gap-3 border-t pt-4">
+                <Button variant="outline" className="flex-1" onClick={() => setShowDraftPrompt(false)}>
+                  Cancel
+                </Button>
+                <Button className="flex-1" onClick={handleStartFresh}>
+                  Start Fresh
+                </Button>
+              </div>
+            </Card>
+          </div>
+        )}
+
         {/* New Procedure Modal */}
         {showNewProcedure && (
-          <div className="fixed inset-0 bg-black/50 z-50 overflow-y-auto">
-            <div className="min-h-full flex items-start justify-center p-2 sm:p-4 py-8">
+          <div className="fixed inset-0 bg-black/50 z-40 overflow-y-auto">
+            <div className="min-h-full flex items-start justify-center p-2 sm:p-4 pt-20 pb-8">
               <Card className="w-full max-w-3xl">
                 <div className="p-4 sm:p-6 max-h-[85vh] overflow-y-auto">
                 <div className="flex items-start justify-between mb-4">
                   <h2 className="text-xl font-bold text-gray-900">
-                    {editingActivityId ? "Edit Activity" : "Schedule New Activity"}
+                    {editingActivityId ? "Edit Encounter" : "Schedule New Encounter"}
                   </h2>
                   <button
-                    onClick={() => { setShowNewProcedure(false); resetForm(); setEditingActivityId(null); }}
+                    onClick={() => { saveDraft(); setShowNewProcedure(false); resetForm(); setEditingActivityId(null); }}
                     className="p-1 hover:bg-gray-100 rounded transition-colors"
+                    title="Save draft and close"
                   >
                     <X size={24} className="text-gray-500" />
                   </button>
                 </div>
 
-                <form onSubmit={async (e) => {
+                <form data-voice-form="encounter" onSubmit={async (e) => {
                   e.preventDefault();
 
                   // Validate required fields
@@ -1627,6 +2733,15 @@ export default function Calendar() {
                     if (!confirmed) {
                       return;
                     }
+
+                    // Add warning notification for schedule conflict
+                    addNotification({
+                      type: "warning",
+                      title: "Schedule Conflict",
+                      message: `Activity scheduled with ${overlappingActivities.length} overlapping procedure(s). Review the schedule.`,
+                      actionUrl: "/calendar",
+                      actionLabel: "View Calendar",
+                    });
                   }
 
                   // Check for DUPLICATE patient encounter (same patient, same time, same title)
@@ -1665,6 +2780,20 @@ export default function Calendar() {
                     finalIntervention = `${formIntervention} - ${formOtherIntervention}`;
                   }
 
+                  // Build notes - append to existing notes when editing
+                  let finalNotes = "";
+                  const existingNotes = editingActivityId ? activities?.find(a => a.id === editingActivityId)?.notes : null;
+                  const newNoteContent = formPmdService ? `Primary: ${formPmdService}${formNotes ? ` | ${formNotes}` : ""}` : formNotes || "";
+
+                  if (editingActivityId && existingNotes && newNoteContent && !existingNotes.includes(newNoteContent)) {
+                    // Append new notes to existing (avoid duplicates)
+                    finalNotes = `${existingNotes}\n---\n${new Date().toLocaleString()}: ${newNoteContent}`;
+                  } else if (newNoteContent) {
+                    finalNotes = newNoteContent;
+                  } else if (existingNotes) {
+                    finalNotes = existingNotes;
+                  }
+
                   const activityData = {
                     patientId,
                     activityTypeId: formActivityTypeIds[0] || (activityTypes?.[0]?.id || 1),
@@ -1674,20 +2803,27 @@ export default function Calendar() {
                     service: formService as any,
                     caseType: formCaseType as any,
                     priority: formPriority as any,
-                    roomId: formRoomId ? Number(formRoomId) : undefined,
+                    roomId: formRoomId ? Number(formRoomId) : null,
                     sedationRequired: formSedationRequired ? 1 : 0,
                     sedationType: formSedationType as any,
                     sedationProvider: formSedationProvider as any,
-                    sedationistId,
-                    pmdId,
-                    intervention: finalIntervention || undefined,
-                    notes: formPmdService ? `Primary: ${formPmdService}${formNotes ? ` | ${formNotes}` : ""}` : formNotes || undefined,
-                    description: formPmdService || undefined,
+                    sedationistId: sedationistId || null,
+                    pmdId: pmdId || null,
+                    intervention: finalIntervention || null,
+                    notes: finalNotes || null,
+                    description: formPmdService || null,
                     status: formStatus as any,
+                    createdBy: currentUser?.id && !isNaN(Number(currentUser.id)) ? Number(currentUser.id) : 1,
+                    createdByName: currentUser?.name || "System",
                   };
 
                   if (editingActivityId) {
-                    updateActivity.mutate({ id: editingActivityId, ...activityData });
+                    updateActivity.mutate({
+                      id: editingActivityId,
+                      ...activityData,
+                      updatedBy: currentUser?.id && !isNaN(Number(currentUser.id)) ? Number(currentUser.id) : 1,
+                      updatedByName: currentUser?.name || "System",
+                    });
                   } else {
                     createActivity.mutate(activityData);
                   }
@@ -1720,7 +2856,25 @@ export default function Calendar() {
                       <label className="block text-sm font-medium text-gray-700 mb-1">Select Patient *</label>
                       <select
                         value={formPatientId}
-                        onChange={(e) => setFormPatientId(e.target.value ? Number(e.target.value) : "")}
+                        onChange={(e) => {
+                          const patientId = e.target.value ? Number(e.target.value) : "";
+                          setFormPatientId(patientId);
+
+                          // Smart suggestion: check for previous visits
+                          if (patientId) {
+                            const lastVisit = getPatientHistory(patientId);
+                            if (lastVisit) {
+                              setPatientLastVisit(lastVisit);
+                              setShowRepeatSuggestion(true);
+                            } else {
+                              setPatientLastVisit(null);
+                              setShowRepeatSuggestion(false);
+                            }
+                          } else {
+                            setPatientLastVisit(null);
+                            setShowRepeatSuggestion(false);
+                          }
+                        }}
                         className="w-full px-3 py-2 border border-gray-300 rounded-md bg-white focus:ring-2 focus:ring-blue-500"
                         required={patientMode === "existing"}
                       >
@@ -1731,6 +2885,29 @@ export default function Calendar() {
                           </option>
                         ))}
                       </select>
+
+                      {/* Smart Suggestion: Repeat Last Visit */}
+                      {showRepeatSuggestion && patientLastVisit && (
+                        <div className="mt-2 p-3 bg-yellow-50 border border-yellow-300 rounded-lg">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <p className="text-sm font-medium text-yellow-800">
+                                🔄 Returning Patient
+                              </p>
+                              <p className="text-xs text-yellow-700 mt-1">
+                                Last visit: <strong>{patientLastVisit.title}</strong> on {new Date(patientLastVisit.startTime).toLocaleDateString()}
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={repeatLastVisit}
+                              className="px-3 py-1.5 bg-yellow-500 text-white text-sm font-medium rounded-md hover:bg-yellow-600 transition-colors"
+                            >
+                              Repeat Visit
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
 
@@ -1738,7 +2915,7 @@ export default function Calendar() {
                   {patientMode === "new" && (
                     <div className="p-3 bg-green-50 border border-green-200 rounded-lg space-y-3">
                       <h4 className="font-medium text-green-800">New Patient Information</h4>
-                      <div className="grid grid-cols-3 gap-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                         <div>
                           <label className="block text-sm font-medium text-gray-700 mb-1">MRN *</label>
                           <input
@@ -1771,7 +2948,7 @@ export default function Calendar() {
                           />
                         </div>
                       </div>
-                      <div className="grid grid-cols-3 gap-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                         <div>
                           <label className="block text-sm font-medium text-gray-700 mb-1">Date of Birth</label>
                           <input
@@ -2007,7 +3184,7 @@ export default function Calendar() {
                   </div>
 
                   {/* Row 2: Service, Case Type, Priority */}
-                  <div className="grid grid-cols-3 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Service</label>
                       <CreatableSelect
@@ -2070,7 +3247,7 @@ export default function Calendar() {
                   </div>
 
                   {/* Row 3: Procedure Type, Room, Status */}
-                  <div className="grid grid-cols-3 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                     <div className="relative">
                       <label className="block text-sm font-medium text-gray-700 mb-1">Procedure Type *</label>
                       <button
@@ -2131,6 +3308,15 @@ export default function Calendar() {
                                         const allSelected = activityTypes?.filter(at => newIds.includes(at.id)).map(at => at.name) || [];
                                         setFormTitle(allSelected.join(" + ") || "LP");
 
+                                        // Auto-set Primary Service and Case Type based on all selected procedures
+                                        const defaults = getDefaultsForProcedures(allSelected);
+                                        if (defaults.primaryService) {
+                                          setFormPmdService(defaults.primaryService);
+                                        }
+                                        if (defaults.caseType) {
+                                          setFormCaseType(defaults.caseType);
+                                        }
+
                                         // Auto-fill based on newly checked type
                                         if (e.target.checked) {
                                           const typeName = t.name;
@@ -2139,19 +3325,16 @@ export default function Calendar() {
                                             setFormIntervention("Lumbar Puncture");
                                             setFormCaseType("Procedure");
                                             setFormSedationRequired(true);
-                                            setFormPmdService("Oncology");
                                             setFormService("Oncology");
                                           } else if (typeName === "BMA" || typeName === "BMBx") {
                                             setFormIntervention(typeName === "BMA" ? "Bone Marrow Aspiration" : "Bone Marrow Biopsy");
                                             setFormCaseType("Procedure");
                                             setFormSedationRequired(true);
-                                            setFormPmdService("Oncology");
                                             setFormService("Oncology");
                                           } else if (typeName === "IT Chemo") {
                                             setFormIntervention("Intrathecal Chemotherapy");
                                             setFormCaseType("Procedure");
                                             setFormSedationRequired(true);
-                                            setFormPmdService("Oncology");
                                             setFormService("Oncology");
                                           } else if (typeName === "PICC" || typeName === "Central Line") {
                                             setFormIntervention(typeName === "PICC" ? "PICC Line Placement" : "Central Line Placement");
@@ -2162,6 +3345,16 @@ export default function Calendar() {
                                             setFormCaseType("Procedure");
                                             setFormSedationRequired(true);
                                             setFormService("Radiology");
+                                          } else if (typeName === "EGD" || typeName === "Colonoscopy") {
+                                            setFormIntervention(typeName);
+                                            setFormCaseType("Procedure");
+                                            setFormSedationRequired(true);
+                                            setFormService("GI");
+                                          } else if (typeName === "Bronchoscopy") {
+                                            setFormIntervention(typeName);
+                                            setFormCaseType("Procedure");
+                                            setFormSedationRequired(true);
+                                            setFormService("Pulmonary");
                                           } else if (typeName === "Consultation" || typeName === "Follow-up") {
                                             setFormCaseType(typeName);
                                             setFormSedationRequired(false);
@@ -2257,7 +3450,7 @@ export default function Calendar() {
                   </div>
 
                   {/* Intervention Type */}
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Intervention Type</label>
                       <CreatableSelect
@@ -2317,7 +3510,7 @@ export default function Calendar() {
                   </div>
 
                   {/* Row 4: Date & Time */}
-                  <div className="grid grid-cols-3 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">Date *</label>
                       <input
@@ -2427,7 +3620,7 @@ export default function Calendar() {
                     </div>
 
                     {formSedationRequired && (
-                      <div className="grid grid-cols-2 gap-4 pl-6 border-l-2 border-blue-200">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pl-4 sm:pl-6 border-l-2 border-blue-200">
                         <div>
                           <label className="block text-sm font-medium text-gray-700 mb-1">Provider Type</label>
                           <select
@@ -2537,16 +3730,24 @@ export default function Calendar() {
                       type="button"
                       variant="outline"
                       className="flex-1"
-                      onClick={() => { setShowNewProcedure(false); resetForm(); }}
+                      onClick={() => { saveDraft(); setShowNewProcedure(false); resetForm(); }}
                     >
-                      Cancel
+                      Save Draft & Close
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="flex-1 text-red-600 hover:text-red-700"
+                      onClick={() => { clearDraft(); setShowNewProcedure(false); resetForm(); }}
+                    >
+                      Discard
                     </Button>
                     <Button
                       type="submit"
                       className="flex-1"
                       disabled={createActivity.isPending}
                     >
-                      {createActivity.isPending ? "Scheduling..." : "Schedule Activity"}
+                      {createActivity.isPending ? "Scheduling..." : "Schedule"}
                     </Button>
                   </div>
                 </form>
@@ -2556,6 +3757,7 @@ export default function Calendar() {
           </div>
         )}
       </div>
+
     </SchedulerLayout>
   );
 }

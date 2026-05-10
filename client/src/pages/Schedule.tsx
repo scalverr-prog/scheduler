@@ -183,7 +183,7 @@ export default function Schedule() {
             </Button>
             <Button onClick={handleNewActivity} className="flex items-center gap-2">
               <Plus size={20} />
-              New Activity
+              New Encounter
             </Button>
           </div>
         </div>

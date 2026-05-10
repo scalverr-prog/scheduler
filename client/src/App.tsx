@@ -4,6 +4,9 @@ import NotFound from "@/pages/NotFound";
 import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
+import { UserProvider, useUser } from "./context/UserContext";
+import { NotificationProvider } from "./context/NotificationContext";
+import LoginModal from "./components/LoginModal";
 import Home from "./pages/Home";
 import Dashboard from "./pages/Dashboard";
 import Patients from "./pages/Patients";
@@ -39,6 +42,16 @@ function Router() {
 //   to keep consistent foreground/background color across components
 // - If you want to make theme switchable, pass `switchable` ThemeProvider and use `useTheme` hook
 
+function AuthenticatedApp() {
+  const { currentUser, allUsers, login } = useUser();
+
+  if (!currentUser) {
+    return <LoginModal onLogin={login} existingUsers={allUsers} />;
+  }
+
+  return <Router />;
+}
+
 function App() {
   return (
     <ErrorBoundary>
@@ -46,10 +59,14 @@ function App() {
         defaultTheme="light"
         // switchable
       >
-        <TooltipProvider>
-          <Toaster />
-          <Router />
-        </TooltipProvider>
+        <UserProvider>
+          <NotificationProvider>
+            <TooltipProvider>
+              <Toaster />
+              <AuthenticatedApp />
+            </TooltipProvider>
+          </NotificationProvider>
+        </UserProvider>
       </ThemeProvider>
     </ErrorBoundary>
   );
