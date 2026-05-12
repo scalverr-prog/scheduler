@@ -4,7 +4,7 @@ import { trpc } from "@/lib/trpc";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useLocation } from "wouter";
-import { Clock, Calendar, Users, CheckCircle, AlertCircle, Activity, FileEdit, X } from "lucide-react";
+import { Clock, Calendar, Users, CheckCircle, AlertCircle, Activity, FileEdit, X, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/_core/hooks/useAuth";
 
@@ -43,8 +43,23 @@ export default function Dashboard() {
     return actDate === today;
   }) || [];
 
+  // Debug: log today's date and all activity dates
+  useEffect(() => {
+    if (activities && activities.length > 0) {
+      console.log("=== TODAY FILTER DEBUG ===");
+      console.log("Today is:", today);
+      console.log("All activities with dates:");
+      activities.forEach(a => {
+        const actDate = new Date(a.startTime).toDateString();
+        console.log(`  - ${a.title}: ${a.startTime} -> ${actDate} (status: ${a.status})`);
+      });
+      console.log("Today's activities count:", todayActivities.length);
+      console.log("Upcoming today count:", upcomingToday.length);
+    }
+  }, [activities, todayActivities]);
+
   const upcomingToday = todayActivities
-    .filter((a) => new Date(a.startTime) > now && a.status !== "Completed" && a.status !== "Cancelled")
+    .filter((a) => a.status !== "Completed" && a.status !== "Cancelled")
     .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
 
   const inProgressActivities = activities?.filter((a) => a.status === "In Progress") || [];
@@ -107,6 +122,10 @@ export default function Dashboard() {
     return new Date(date).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   };
 
+  const formatDateShort = (date: Date) => {
+    return new Date(date).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  };
+
   // Check for pending draft forms
   const getDraftSummaries = () => {
     try {
@@ -156,6 +175,13 @@ export default function Dashboard() {
             </p>
           </div>
           <div className="flex gap-2">
+            <Button
+              onClick={() => navigate('/calendar?newActivity=true')}
+              className="flex items-center gap-2"
+            >
+              <Plus size={18} />
+              New Encounter
+            </Button>
             <Card
               className="px-4 py-2 flex items-center gap-2 cursor-pointer hover:bg-muted transition-colors"
               onClick={() => navigate('/staff')}
@@ -217,7 +243,10 @@ export default function Dashboard() {
                   onClick={() => navigate(`/calendar?edit=${activity.id}`)}
                   className="flex items-center gap-3 p-2 bg-white rounded-lg border hover:shadow-md cursor-pointer transition-all"
                 >
-                  <div className="text-sm font-bold text-blue-600 w-16">{formatTime(activity.startTime)}</div>
+                  <div className="text-sm font-bold text-blue-600 w-24">
+                    <div>{formatDateShort(activity.startTime)}</div>
+                    <div className="text-xs">{formatTime(activity.startTime)}</div>
+                  </div>
                   <div className="flex-1 min-w-0">
                     <div className="font-medium text-gray-900 truncate">{activity.title}</div>
                     <div className="text-xs text-gray-500 truncate">
@@ -303,7 +332,8 @@ export default function Dashboard() {
                     onClick={() => navigate(`/calendar?edit=${activity.id}`)}
                     className="flex items-center gap-4 p-3 bg-muted rounded-lg cursor-pointer hover:bg-muted/80 transition-all"
                   >
-                    <div className="text-center min-w-[60px]">
+                    <div className="text-center min-w-[70px]">
+                      <p className="text-xs font-medium text-blue-600">{formatDateShort(activity.startTime)}</p>
                       <p className="text-lg font-bold text-primary">{formatTime(activity.startTime)}</p>
                     </div>
                     <div className="flex-1 border-l-2 border-primary pl-4">
@@ -370,7 +400,7 @@ export default function Dashboard() {
                     <div className="flex-1">
                       <p className="font-semibold text-foreground">{activity.title}</p>
                       <p className="text-sm text-muted-foreground">
-                        {getPatientName(activity.patientId)} • Started {formatTime(activity.startTime)}
+                        {getPatientName(activity.patientId)} • Started {formatDateShort(activity.startTime)} {formatTime(activity.startTime)}
                         {getRoomName(activity.roomId) && (
                           <span className="ml-1 text-blue-600">• {getRoomName(activity.roomId)}</span>
                         )}

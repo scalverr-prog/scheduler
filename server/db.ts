@@ -382,3 +382,58 @@ export async function createStaffMember(name: string, specialization?: string) {
 
   return { insertId };
 }
+
+/**
+ * Update a staff member's name and/or specialization
+ */
+export async function updateStaffMember(userId: number, name?: string, specialization?: string) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  // Update name if provided
+  if (name) {
+    let formattedName = name.trim();
+    const nurseRoles = ["Nurse"];
+    const techRoles = ["Technician"];
+
+    // Auto-add credential suffix based on specialization
+    if (specialization && !formattedName.match(/,\s*(MD|RN|DO)$/i)) {
+      if (nurseRoles.includes(specialization)) {
+        formattedName = `${formattedName}, RN`;
+      } else if (!techRoles.includes(specialization)) {
+        formattedName = `${formattedName}, MD`;
+      }
+    }
+
+    await db.update(users).set({ name: formattedName, updatedAt: new Date() }).where(eq(users.id, userId));
+  }
+
+  // Update specialization if provided
+  if (specialization) {
+    // Delete existing specializations and add new one
+    await db.delete(staffSpecializations).where(eq(staffSpecializations.userId, userId));
+    await db.insert(staffSpecializations).values({
+      userId,
+      specialization: specialization as any,
+      isActive: 1,
+    });
+  }
+
+  return { success: true };
+}
+
+/**
+ * Delete a staff member
+ */
+export async function deleteStaffMember(userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+
+  // Delete specializations first (foreign key relationship)
+  await db.delete(staffSpecializations).where(eq(staffSpecializations.userId, userId));
+
+  // Delete the user
+  await db.delete(users).where(eq(users.id, userId));
+
+  return { success: true };
+}

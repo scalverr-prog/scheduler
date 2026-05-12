@@ -20,6 +20,7 @@ export default function SchedulerLayout({ children }: SchedulerLayoutProps) {
     { href: "/calendar", label: "Calendar", icon: "🗓️" },
     { href: "/schedule", label: "Schedule", icon: "📅" },
     { href: "/patients", label: "Patients", icon: "👥" },
+    { href: "/staff", label: "Staff", icon: "⚕️" },
     { href: "/audit", label: "Audit Log", icon: "📋" },
   ];
 

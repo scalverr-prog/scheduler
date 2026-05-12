@@ -5,7 +5,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { useState } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Search, Plus, UserPlus, Stethoscope, Droplet, Users } from "lucide-react";
+import { Search, Plus, UserPlus, Stethoscope, Droplet, Users, Pencil, Trash2 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { toast } from "sonner";
 
@@ -16,6 +16,14 @@ export default function Staff() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [newStaffName, setNewStaffName] = useState("");
   const [newStaffSpecialization, setNewStaffSpecialization] = useState<string>("PMD");
+
+  // Edit state
+  const [editModalOpen, setEditModalOpen] = useState(false);
+  const [editingStaff, setEditingStaff] = useState<{ id: number; name: string; specialization: string } | null>(null);
+
+  // Delete state
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [staffToDelete, setStaffToDelete] = useState<{ id: number; name: string } | null>(null);
 
   const createMutation = trpc.activities.createStaff.useMutation({
     onSuccess: () => {
@@ -30,6 +38,30 @@ export default function Staff() {
     },
   });
 
+  const updateMutation = trpc.activities.updateStaff.useMutation({
+    onSuccess: () => {
+      toast.success("Staff member updated successfully");
+      utils.activities.getStaff.invalidate();
+      setEditModalOpen(false);
+      setEditingStaff(null);
+    },
+    onError: (error) => {
+      toast.error(error.message || "Failed to update staff member");
+    },
+  });
+
+  const deleteMutation = trpc.activities.deleteStaff.useMutation({
+    onSuccess: () => {
+      toast.success("Staff member deleted");
+      utils.activities.getStaff.invalidate();
+      setDeleteModalOpen(false);
+      setStaffToDelete(null);
+    },
+    onError: (error) => {
+      toast.error(error.message || "Failed to delete staff member");
+    },
+  });
+
   const handleAddStaff = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newStaffName.trim()) {
@@ -40,6 +72,35 @@ export default function Staff() {
       name: newStaffName,
       specialization: newStaffSpecialization as any,
     });
+  };
+
+  const handleEditStaff = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingStaff) return;
+    updateMutation.mutate({
+      id: editingStaff.id,
+      name: editingStaff.name,
+      specialization: editingStaff.specialization as any,
+    });
+  };
+
+  const handleDeleteStaff = () => {
+    if (!staffToDelete) return;
+    deleteMutation.mutate({ id: staffToDelete.id });
+  };
+
+  const openEditModal = (member: { id: number; name?: string | null; specializations?: string[] }) => {
+    setEditingStaff({
+      id: member.id,
+      name: member.name || "",
+      specialization: member.specializations?.[0] || "PMD",
+    });
+    setEditModalOpen(true);
+  };
+
+  const openDeleteModal = (member: { id: number; name?: string | null }) => {
+    setStaffToDelete({ id: member.id, name: member.name || "Unknown" });
+    setDeleteModalOpen(true);
   };
 
   const filteredStaff = staff?.filter(
@@ -149,8 +210,30 @@ export default function Staff() {
                     {member.name?.charAt(0).toUpperCase() || "?"}
                   </div>
                   <div className="flex-1">
-                    <h3 className="font-semibold text-foreground">{member.name || "Unknown"}</h3>
-                    <p className="text-sm text-muted-foreground mb-2">ID: {member.id}</p>
+                    <div className="flex items-start justify-between">
+                      <div>
+                        <h3 className="font-semibold text-foreground">{member.name || "Unknown"}</h3>
+                        <p className="text-sm text-muted-foreground mb-2">ID: {member.id}</p>
+                      </div>
+                      <div className="flex gap-1">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => openEditModal(member)}
+                          className="h-8 w-8 p-0"
+                        >
+                          <Pencil size={14} />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => openDeleteModal(member)}
+                          className="h-8 w-8 p-0 text-red-600 hover:text-red-700 hover:bg-red-50"
+                        >
+                          <Trash2 size={14} />
+                        </Button>
+                      </div>
+                    </div>
                     <div className="flex flex-wrap gap-1">
                       {getSpecializationBadge(member.specializations)}
                     </div>
@@ -219,6 +302,83 @@ export default function Staff() {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Staff Modal */}
+      <Dialog open={editModalOpen} onOpenChange={setEditModalOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit Staff Member</DialogTitle>
+          </DialogHeader>
+          <form onSubmit={handleEditStaff} className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium mb-1">Name *</label>
+              <Input
+                value={editingStaff?.name || ""}
+                onChange={(e) => setEditingStaff(prev => prev ? { ...prev, name: e.target.value } : null)}
+                placeholder="Dr. John Smith"
+                required
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">Specialization</label>
+              <select
+                value={editingStaff?.specialization || "PMD"}
+                onChange={(e) => setEditingStaff(prev => prev ? { ...prev, specialization: e.target.value } : null)}
+                className="w-full px-3 py-2 border border-border rounded-md"
+              >
+                <optgroup label="Procedure Providers">
+                  <option value="PMD">Primary (PMD)</option>
+                  <option value="Oncology">Oncology</option>
+                  <option value="Peds-Surgery">Peds-Surgery</option>
+                </optgroup>
+                <optgroup label="Sedation Providers">
+                  <option value="Sedationist">Sedationist</option>
+                  <option value="Anesthesiologist">Anesthesiologist</option>
+                  <option value="Intensivist">Intensivist</option>
+                </optgroup>
+                <optgroup label="Support Staff">
+                  <option value="Nurse">Nurse</option>
+                  <option value="Technician">Technician</option>
+                  <option value="Other">Other</option>
+                </optgroup>
+              </select>
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setEditModalOpen(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={updateMutation.isPending}>
+                {updateMutation.isPending ? "Saving..." : "Save Changes"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Confirmation Modal */}
+      <Dialog open={deleteModalOpen} onOpenChange={setDeleteModalOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Staff Member</DialogTitle>
+          </DialogHeader>
+          <p className="text-muted-foreground">
+            Are you sure you want to delete <strong>{staffToDelete?.name}</strong>? This action cannot be undone.
+          </p>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setDeleteModalOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={handleDeleteStaff}
+              disabled={deleteMutation.isPending}
+            >
+              {deleteMutation.isPending ? "Deleting..." : "Delete"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </SchedulerLayout>

@@ -92,6 +92,7 @@ async function seed() {
       // GI/Pulmonary
       { name: "EGD", colorCode: "#059669", description: "Esophagogastroduodenoscopy" },
       { name: "Colonoscopy", colorCode: "#059669", description: "Colonoscopy" },
+      { name: "Clean Out", colorCode: "#059669", description: "Bowel Clean Out / Prep" },
       { name: "Bronchoscopy", colorCode: "#059669", description: "Bronchoscopy" },
       { name: "Paracentesis", colorCode: "#059669", description: "Paracentesis" },
       { name: "Thoracentesis", colorCode: "#059669", description: "Thoracentesis" },

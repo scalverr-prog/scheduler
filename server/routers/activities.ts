@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { protectedProcedure, router } from "../_core/trpc";
-import { getActivities, getActivityById, createActivity, updateActivity, deleteActivity, getActivitiesByPatient, getActivityTypes, getRooms, getStaffWithSpecializations, createStaffMember } from "../db";
+import { getActivities, getActivityById, createActivity, updateActivity, deleteActivity, getActivitiesByPatient, getActivityTypes, getRooms, getStaffWithSpecializations, createStaffMember, updateStaffMember, deleteStaffMember } from "../db";
 import { createAuditLog } from "../db";
 
 const activitySchema = z.object({
@@ -19,7 +19,7 @@ const activitySchema = z.object({
   service: z.enum([
     "GI", "Pulmonary", "Cardiology", "Radiology", "Neurology",
     "Orthopedics", "General Surgery", "Vascular", "Urology",
-    "ENT", "Oncology", "Pain Management", "Other"
+    "ENT", "Oncology", "Pediatrics", "Pain Management", "Other"
   ]).nullish(),
   caseType: z.enum(["Procedure", "Direct Admit", "Consultation", "Follow-up"]).nullish(),
   priority: z.enum(["Planned", "Routine", "Urgent", "Emergent", "Add-On"]).nullish(),
@@ -307,5 +307,31 @@ export const activitiesRouter = router({
       }
       const result = await createStaffMember(input.name, input.specialization);
       return { success: true, id: result.insertId };
+    }),
+
+  updateStaff: protectedProcedure
+    .input(z.object({
+      id: z.number(),
+      name: z.string().min(1, "Name is required").optional(),
+      specialization: z.enum(["PMD", "Sedationist", "Nurse", "Technician", "Anesthesiologist", "Other", "Oncology", "Peds-Surgery", "Intensivist"]).optional(),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      if (ctx.user.role !== "admin" && ctx.user.role !== "staff") {
+        throw new Error("Unauthorized: Only admin or staff can update staff members");
+      }
+      await updateStaffMember(input.id, input.name, input.specialization);
+      return { success: true };
+    }),
+
+  deleteStaff: protectedProcedure
+    .input(z.object({
+      id: z.number(),
+    }))
+    .mutation(async ({ input, ctx }) => {
+      if (ctx.user.role !== "admin" && ctx.user.role !== "staff") {
+        throw new Error("Unauthorized: Only admin or staff can delete staff members");
+      }
+      await deleteStaffMember(input.id);
+      return { success: true };
     }),
 });
