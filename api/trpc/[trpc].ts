@@ -370,6 +370,42 @@ const appRouter = t.router({
 
         return { success: true, id: user.id };
       }),
+    updateStaff: t.procedure
+      .input(z.object({
+        id: z.number(),
+        name: z.string().optional(),
+        specialization: z.string().optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const db = getDb();
+
+        if (input.name) {
+          await db.update(users).set({
+            name: input.name,
+            updatedAt: new Date()
+          }).where(eq(users.id, input.id));
+        }
+
+        if (input.specialization) {
+          await db.delete(staffSpecializations).where(eq(staffSpecializations.userId, input.id));
+          await db.insert(staffSpecializations).values({
+            userId: input.id,
+            specialization: input.specialization as any,
+          });
+        }
+
+        return { success: true };
+      }),
+    deleteStaff: t.procedure
+      .input(z.object({
+        id: z.number(),
+      }))
+      .mutation(async ({ input }) => {
+        const db = getDb();
+        await db.delete(staffSpecializations).where(eq(staffSpecializations.userId, input.id));
+        await db.delete(users).where(eq(users.id, input.id));
+        return { success: true };
+      }),
   }),
   rooms: t.router({
     list: t.procedure.query(async () => {
