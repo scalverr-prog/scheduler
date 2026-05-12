@@ -206,6 +206,16 @@ const appRouter = t.router({
         await db.update(patients).set(cleanedData).where(eq(patients.id, id));
         return { success: true };
       }),
+    delete: t.procedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ input }) => {
+        const db = getDb();
+        // Delete associated activities first
+        await db.delete(activities).where(eq(activities.patientId, input.id));
+        // Delete the patient
+        await db.delete(patients).where(eq(patients.id, input.id));
+        return { success: true };
+      }),
   }),
   activities: t.router({
     list: t.procedure.query(async () => {
