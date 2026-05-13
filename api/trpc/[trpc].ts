@@ -22,7 +22,7 @@ const genderEnum = pgEnum("gender", ["M", "F", "Other", "Prefer not to say"]);
 const admissionStatusEnum = pgEnum("admission_status", ["Inpatient", "Direct Admit", "Subacute Facility"]);
 const patientStatusEnum = pgEnum("patient_status", ["Active", "Inactive", "Discharged", "Transferred"]);
 const roomTypeEnum = pgEnum("room_type", ["OR", "Procedure Room", "Imaging", "Consultation", "Ward", "ICU", "Other"]);
-const activityStatusEnum = pgEnum("activity_status", ["Pending", "Requested", "Scheduled", "Confirmed", "In Progress", "Completed", "Cancelled"]);
+const activityStatusEnum = pgEnum("activity_status", ["Pending", "Requested", "Unconfirmed", "Scheduled", "Confirmed", "In Progress", "Completed", "Cancelled"]);
 const specializationEnum = pgEnum("specialization", ["PMD", "Sedationist", "Nurse", "Technician", "Anesthesiologist", "Other", "Oncology", "Peds-Surgery", "Intensivist"]);
 
 // Define tables inline

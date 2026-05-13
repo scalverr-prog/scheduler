@@ -9,13 +9,13 @@ export const roomTypeEnum = pgEnum("room_type", ["OR", "Procedure Room", "Imagin
 export const serviceEnum = pgEnum("service", [
   "GI", "Pulmonary", "Cardiology", "Radiology", "Neurology",
   "Orthopedics", "General Surgery", "Vascular", "Urology",
-  "ENT", "Oncology", "Pain Management", "Other"
+  "ENT", "Oncology", "Pediatrics", "Pain Management", "Other"
 ]);
 export const caseTypeEnum = pgEnum("case_type", ["Procedure", "Direct Admit", "Consultation", "Follow-up"]);
 export const priorityEnum = pgEnum("priority", ["Planned", "Routine", "Urgent", "Emergent", "Add-On"]);
 export const sedationTypeEnum = pgEnum("sedation_type", ["None", "Conscious Sedation", "Moderate Sedation", "MAC", "General Anesthesia"]);
 export const sedationProviderEnum = pgEnum("sedation_provider", ["None", "Intensivist", "Anesthesia", "Proceduralist"]);
-export const activityStatusEnum = pgEnum("activity_status", ["Pending", "Requested", "Scheduled", "Confirmed", "In Progress", "Completed", "Cancelled"]);
+export const activityStatusEnum = pgEnum("activity_status", ["Pending", "Requested", "Unconfirmed", "Scheduled", "Confirmed", "In Progress", "Completed", "Cancelled"]);
 export const auditActionEnum = pgEnum("audit_action", ["CREATE", "UPDATE", "DELETE", "CANCEL", "CONFIRM"]);
 export const entityTypeEnum = pgEnum("entity_type", ["Activity", "Patient", "Room", "User"]);
 export const specializationEnum = pgEnum("specialization", ["PMD", "Sedationist", "Nurse", "Technician", "Anesthesiologist", "Other", "Oncology", "Peds-Surgery", "Intensivist"]);

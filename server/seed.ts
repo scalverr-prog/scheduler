@@ -58,13 +58,10 @@ async function seed() {
     // Create rooms
     console.log("[Seed] Creating rooms...");
     const roomsData = [
-      { name: "Procedure Room 1", type: "Procedure Room" as const, capacity: 2, isActive: 1 },
-      { name: "Procedure Room 2", type: "Procedure Room" as const, capacity: 2, isActive: 1 },
-      { name: "OR Suite A", type: "OR" as const, capacity: 4, isActive: 1 },
-      { name: "OR Suite B", type: "OR" as const, capacity: 4, isActive: 1 },
-      { name: "Imaging Room", type: "Imaging" as const, capacity: 2, isActive: 1 },
-      { name: "ICU Bay 1", type: "ICU" as const, capacity: 1, isActive: 1 },
-      { name: "Consultation Room", type: "Consultation" as const, capacity: 3, isActive: 1 },
+      { name: "Peds Procedure Room", type: "Procedure Room" as const, capacity: 2, isActive: 1 },
+      { name: "PICU", type: "ICU" as const, capacity: 4, isActive: 1 },
+      { name: "IR", type: "Imaging" as const, capacity: 2, isActive: 1 },
+      { name: "MRI", type: "Imaging" as const, capacity: 2, isActive: 1 },
     ];
 
     for (const room of roomsData) {
