@@ -10,6 +10,9 @@ let _db: ReturnType<typeof drizzleNeon> | ReturnType<typeof drizzlePg> | null = 
 // Detect if running in serverless environment (Vercel, AWS Lambda, etc.)
 const isServerless = !!(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
 
+// Detect if running on Azure
+const isAzure = process.env.AZURE_POSTGRESQL === 'true';
+
 // Lazily create the drizzle instance so local tooling can run without a DB.
 export async function getDb() {
   if (!_db && process.env.DATABASE_URL) {
@@ -18,6 +21,11 @@ export async function getDb() {
         // Use Neon serverless driver for Vercel/Lambda
         const sql = neon(process.env.DATABASE_URL);
         _db = drizzleNeon(sql);
+      } else if (isAzure) {
+        // Use node-postgres for Azure with SSL required
+        // Azure PostgreSQL requires SSL - connection string should include ?sslmode=require
+        _db = drizzlePg(process.env.DATABASE_URL);
+        console.log("[Database] Connected to Azure PostgreSQL with SSL");
       } else {
         // Use node-postgres for local development
         _db = drizzlePg(process.env.DATABASE_URL);

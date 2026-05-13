@@ -176,6 +176,8 @@ export default defineConfig({
       ".manus-asia.computer",
       ".manuscomputer.ai",
       ".manusvm.computer",
+      ".azurewebsites.net",  // Azure App Service
+      ".azure.com",          // Azure domains
       "localhost",
       "127.0.0.1",
     ],

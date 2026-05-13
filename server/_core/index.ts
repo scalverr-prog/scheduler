@@ -136,6 +136,16 @@ async function startServer() {
   // Voice scribe API endpoint
   app.post('/api/scribe', handleScribeRequest);
 
+  // Health check endpoint for Azure App Service
+  app.get('/health', (req, res) => {
+    res.json({
+      status: 'healthy',
+      timestamp: new Date().toISOString(),
+      version: process.env.npm_package_version || '1.0.0',
+      environment: process.env.NODE_ENV || 'development'
+    });
+  });
+
   // tRPC API
   app.use(
     "/api/trpc",

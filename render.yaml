@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: patient-scheduler
+    runtime: node
+    region: oregon
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: node dist/migrate.js && node dist/_core/index.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: AZURE_POSTGRESQL
+        value: true
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: VITE_APP_ID
+        value: patient-scheduler-render
+      - key: OWNER_OPEN_ID
+        value: render-owner
